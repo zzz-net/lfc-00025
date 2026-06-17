@@ -31,6 +31,7 @@ async function loadModules() {
   const AnomalyRepo = await import('../api/repositories/AnomalyRepo.js');
   const AnnotationRepo = await import('../api/repositories/AnnotationRepo.js');
   const ConfigRepo = await import('../api/repositories/ConfigRepo.js');
+  const DataDb = await import('../api/data/db.js');
   const fileHash = await import('../api/utils/fileHash.js');
   return {
     importSampleData: ImportSvc.importSampleData,
@@ -44,6 +45,7 @@ async function loadModules() {
     saveAppState: ConfigRepo.saveAppState,
     getThresholdConfig: ConfigRepo.getThresholdConfig,
     generateId: fileHash.generateId,
+    db: DataDb.db,
   };
 }
 
@@ -368,6 +370,68 @@ describe('硬伤回归：生产启动链路 + 筛选导出一致性', () => {
         assert.equal(rows1[i]['处理人'], rows2[i]['处理人'], `#${i} 处理人一致`);
         assert.equal(rows1[i]['处理原因'], rows2[i]['处理原因'], `#${i} 原因一致`);
       }
+    });
+  });
+
+  // ========== 硬伤4：首页统计被放大到数百万 ==========
+  describe('4. 首页/传感器卡片统计必须与 SQLite ground truth 完全一致', () => {
+    before(() => {
+      // 如果前面套件已经导入过样例（findAllSensors 有数据），就不重复导入，避免 file_hash 去重拒绝
+      const existing = m.findAllSensors();
+      if (existing.length === 0) {
+        const res = m.importSampleData();
+        assert.ok(res.success, '首次导入样例必须成功');
+      }
+      // 兜底：再次确认有数据
+      const sensors = m.findAllSensors();
+      assert.ok(sensors.length > 0, '导入后至少 1 台传感器');
+    });
+
+    it('每台传感器 readingCount = SELECT COUNT(*) FROM readings WHERE sensor_id = X', () => {
+      const sensors = m.findAllSensors();
+      assert.ok(sensors.length > 0, '至少有一台传感器');
+      let sumAll = 0;
+      for (const s of sensors) {
+        const gt = (m.db as any).prepare('SELECT COUNT(*) as c FROM readings WHERE sensor_id = ?').get(s.id).c;
+        assert.equal(s.readingCount, gt,
+          `${s.id} readingCount 必须是 SQLite 实际行数 ${gt}，实际返回 ${s.readingCount}`);
+        // 断言不能是百万级（旧 bug 特征：R × A 乘积）
+        assert.ok(s.readingCount < 1_000_000,
+          `${s.id} readingCount 不可能达到百万级（${s.readingCount}），疑似笛卡尔积放大`);
+        sumAll += s.readingCount;
+      }
+      const gtTotal = (m.db as any).prepare('SELECT COUNT(*) as c FROM readings').get().c;
+      assert.equal(sumAll, gtTotal, `所有传感器 readingCount 汇总 = 表总行数 ${gtTotal}`);
+    });
+
+    it('每台传感器 anomalyCount / pendingCount 不能超过该传感器 anomalies 总行数，且不被放大', () => {
+      const sensors = m.findAllSensors();
+      for (const s of sensors) {
+        const gt = (m.db as any).prepare('SELECT COUNT(*) as c FROM anomalies WHERE sensor_id = ?').get(s.id).c;
+        assert.ok(s.anomalyCount <= gt,
+          `${s.id} anomalyCount(${s.anomalyCount}) 不能超过 anomalies 总行数(${gt})`);
+        assert.ok(s.pendingCount <= gt,
+          `${s.id} pendingCount(${s.pendingCount}) 不能超过 anomalies 总行数(${gt})`);
+        assert.ok(s.anomalyCount < 1_000_000,
+          `${s.id} anomalyCount(${s.anomalyCount}) 不可能百万级`);
+        assert.ok(s.pendingCount < 1_000_000,
+          `${s.id} pendingCount(${s.pendingCount}) 不可能百万级`);
+      }
+    });
+
+    it('样例数据总行数必须与设计一致：约 1 万读数 / 约 1 万异常', () => {
+      const totalReadings = (m.db as any).prepare('SELECT COUNT(*) as c FROM readings').get().c;
+      const totalAnomalies = (m.db as any).prepare('SELECT COUNT(*) as c FROM anomalies').get().c;
+      // 样例数据：5 台 × 7 天 × 每 5 分钟一条 ≈ 5×7×288 = 10080 条读数
+      assert.ok(totalReadings >= 9000 && totalReadings <= 12000,
+        `样例读数总行数应约 1 万，实际 ${totalReadings}`);
+      assert.ok(totalAnomalies >= 5000 && totalAnomalies <= 20000,
+        `样例异常总行数应数千~1 万，实际 ${totalAnomalies}`);
+      // 统计汇总也必须落在同一量级
+      const sensors = m.findAllSensors();
+      const sumR = sensors.reduce((a, b) => a + b.readingCount, 0);
+      assert.ok(sumR >= 9000 && sumR <= 12000,
+        `findAllSensors 汇总 readingCount 应约 1 万，实际 ${sumR}`);
     });
   });
 });

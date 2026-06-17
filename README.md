@@ -74,7 +74,7 @@ npm start
 
 ### 前置：启动并导入数据
 
-1. 运行 `npm run dev`，浏览器打开 http://localhost:3000
+1. 运行 `npm run dev`，浏览器打开 http://localhost:5173
 2. 点击顶栏 **「导入样例」** 按钮，等待提示「样例导入成功」
 3. 左侧传感器列表出现 5 台设备
 

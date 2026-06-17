@@ -1,12 +1,13 @@
 import { db } from '../data/db.js';
 import type { Sensor } from '../../shared/types.js';
 
+// 统计查询使用 COUNT(DISTINCT) 避免 readings × anomalies 笛卡尔积放大结果
 export function findAllSensors(): Sensor[] {
   const rows = db.prepare(`
     SELECT s.*,
-      COUNT(r.id) as reading_count,
-      SUM(CASE WHEN a.id IS NOT NULL AND (ann.status IS NULL OR ann.status = 'DETECTED' OR ann.rolled_back_at IS NOT NULL) THEN 1 ELSE 0 END) as anomaly_count,
-      SUM(CASE WHEN a.id IS NOT NULL AND (ann.status = 'PENDING' OR ann.status IS NULL) AND (ann.rolled_back_at IS NULL OR ann.rolled_back_at IS NOT NULL) THEN 1 ELSE 0 END) as pending_count
+      COUNT(DISTINCT r.id) as reading_count,
+      COUNT(DISTINCT CASE WHEN a.id IS NOT NULL AND (ann.status IS NULL OR ann.status = 'DETECTED' OR ann.rolled_back_at IS NOT NULL) THEN a.id END) as anomaly_count,
+      COUNT(DISTINCT CASE WHEN a.id IS NOT NULL AND (ann.status = 'PENDING' OR ann.status IS NULL) THEN a.id END) as pending_count
     FROM sensors s
     LEFT JOIN readings r ON r.sensor_id = s.id
     LEFT JOIN anomalies a ON a.sensor_id = s.id
