@@ -14,14 +14,23 @@ if (!fs.existsSync(EXPORT_DIR)) {
   fs.mkdirSync(EXPORT_DIR, { recursive: true });
 }
 
-function resolveTimeRange(appState: any, customStart?: string, customEnd?: string): { start?: string; end?: string } {
-  const tr = appState.timeRange || 'ALL';
-  if (tr === 'CUSTOM') {
-    return { start: customStart ?? appState.customStart, end: customEnd ?? appState.customEnd };
+function resolveTimeRange(
+  timeRangeMode: 'ALL' | '1H' | '24H' | '7D' | 'CUSTOM' | string,
+  customStart?: string,
+  customEnd?: string,
+): { start?: string; end?: string } {
+  if (timeRangeMode === 'CUSTOM') {
+    const tr: { start?: string; end?: string } = {};
+    if (customStart) tr.start = customStart;
+    if (customEnd) tr.end = customEnd;
+    return tr;
   }
-  if (tr === 'ALL') return {};
+  if (timeRangeMode === 'ALL') return {};
   const now = Date.now();
-  const ms = tr === '1H' ? 3600_000 : tr === '24H' ? 86400_000 : 7 * 86400_000;
+  const ms =
+    timeRangeMode === '1H' ? 3600_000
+      : timeRangeMode === '24H' ? 86400_000
+      : 7 * 86400_000;
   return { start: new Date(now - ms).toISOString() };
 }
 
@@ -29,17 +38,21 @@ function buildFilterFromRequest(req: Request): ReportFilter {
   const body = (req.body || {}) as any;
   const appState = getAppState();
 
+  // 1. sensorId：body 优先 → appState 兜底
   const sensorId: string | undefined = body.sensorId ?? appState.selectedSensorId ?? undefined;
+
+  // 2. statusFilter：body 优先 → appState 兜底
   const statusFilter: any = body.statusFilter ?? appState.statusFilter ?? 'ALL';
-  const timeRange = resolveTimeRange(
-    appState,
-    body.customStart,
-    body.customEnd,
-  );
+
+  // 3. 时间范围：body.timeRange 优先（用 body.customStart/customEnd）→ 兜底 appState
+  const timeRangeMode = body.timeRange ?? appState.timeRange ?? 'ALL';
+  const cStart = body.customStart ?? appState.customStart;
+  const cEnd = body.customEnd ?? appState.customEnd;
+  const timeRange = resolveTimeRange(timeRangeMode, cStart, cEnd);
 
   const filter: ReportFilter = {};
   if (sensorId) filter.sensorId = sensorId;
-  if (statusFilter) filter.statusFilter = statusFilter;
+  if (statusFilter && statusFilter !== 'ALL') filter.statusFilter = statusFilter;
   filter.timeRange = timeRange;
 
   return filter;

@@ -128,7 +128,8 @@ export const useQCStore = create<QCStore>((set, get) => ({
     try {
       const sid = sensorId ?? get().selectedSensorId ?? undefined;
       const status = get().statusFilter === 'ALL' ? undefined : get().statusFilter;
-      const res = await api.anomalies.list(sid, status);
+      const { start, end } = get().getTimeRangeParams();
+      const res = await api.anomalies.list(sid, status, start, end);
       set({ anomalies: res.data });
     } catch (e: any) {
       get().addToast({ type: 'error', message: '加载异常失败: ' + e.message });
@@ -236,6 +237,7 @@ export const useQCStore = create<QCStore>((set, get) => ({
     void get().persistState();
     const sel = get().selectedSensorId;
     if (sel) void get().loadReadings(sel);
+    void get().loadAnomalies();
   },
 
   persistState: async () => {

@@ -55,10 +55,12 @@ export const api = {
     batches: () => req<{ success: boolean; data: ImportBatch[] }>('/import/batches'),
   },
   anomalies: {
-    list: (sensorId?: string, status?: string) => {
+    list: (sensorId?: string, status?: string, start?: string, end?: string) => {
       const qs = new URLSearchParams();
       if (sensorId) qs.set('sensorId', sensorId);
       if (status) qs.set('status', status);
+      if (start) qs.set('start', start);
+      if (end) qs.set('end', end);
       const q = qs.toString();
       return req<{ success: boolean; data: Anomaly[] }>(`/anomalies${q ? '?' + q : ''}`);
     },

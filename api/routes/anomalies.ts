@@ -14,8 +14,11 @@ import type { AnnotationStatus, ThresholdConfig } from '../../shared/types.js';
 const router = Router();
 
 router.get('/', (req: Request, res: Response) => {
-  const { sensorId, status } = req.query as { sensorId?: string; status?: string };
-  const anomalies = findAllAnomalies(sensorId, status as any);
+  const { sensorId, status, start, end } = req.query as { sensorId?: string; status?: string; start?: string; end?: string };
+  const timeRange: { start?: string; end?: string } = {};
+  if (start) timeRange.start = start;
+  if (end) timeRange.end = end;
+  const anomalies = findAllAnomalies(sensorId, status as any, Object.keys(timeRange).length > 0 ? timeRange : undefined);
   res.json({ success: true, data: anomalies });
 });
 

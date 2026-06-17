@@ -129,6 +129,10 @@ export function findAnnotationHistoryByFilter(
     where.push('a.sensor_id = ?');
     params.push(filter.sensorId);
   }
+  if (filter?.statusFilter && filter.statusFilter !== 'ALL') {
+    where.push('ann.status = ? AND ann.rolled_back_at IS NULL');
+    params.push(filter.statusFilter);
+  }
   if (filter?.timeRange?.start) {
     where.push('r.timestamp >= ?');
     params.push(filter.timeRange.start);
