@@ -422,16 +422,92 @@ describe('硬伤回归：生产启动链路 + 筛选导出一致性', () => {
     it('样例数据总行数必须与设计一致：约 1 万读数 / 约 1 万异常', () => {
       const totalReadings = (m.db as any).prepare('SELECT COUNT(*) as c FROM readings').get().c;
       const totalAnomalies = (m.db as any).prepare('SELECT COUNT(*) as c FROM anomalies').get().c;
-      // 样例数据：5 台 × 7 天 × 每 5 分钟一条 ≈ 5×7×288 = 10080 条读数
       assert.ok(totalReadings >= 9000 && totalReadings <= 12000,
         `样例读数总行数应约 1 万，实际 ${totalReadings}`);
       assert.ok(totalAnomalies >= 5000 && totalAnomalies <= 20000,
         `样例异常总行数应数千~1 万，实际 ${totalAnomalies}`);
-      // 统计汇总也必须落在同一量级
       const sensors = m.findAllSensors();
       const sumR = sensors.reduce((a, b) => a + b.readingCount, 0);
       assert.ok(sumR >= 9000 && sumR <= 12000,
         `findAllSensors 汇总 readingCount 应约 1 万，实际 ${sumR}`);
+    });
+
+    it('❌ buggy SQL（无 DISTINCT）必须至少放大 10 倍，✅ 当前 SQL 必须无放大（复现特征锁定）', () => {
+      // 故意执行旧 buggy 写法，验证复现特征依然存在（防止有人误以为 DISTINCT 是多余的而删掉）
+      const buggy = (m.db as any).prepare(`
+        SELECT s.id, COUNT(r.id) as c
+        FROM sensors s
+        LEFT JOIN readings r ON r.sensor_id = s.id
+        LEFT JOIN anomalies a ON a.sensor_id = s.id
+        GROUP BY s.id
+      `).all() as any[];
+      const gt = (m.db as any).prepare(`
+        SELECT s.id, (SELECT COUNT(*) FROM readings r WHERE r.sensor_id = s.id) as c
+        FROM sensors s
+      `).all() as any[];
+      let maxRatio = 0;
+      for (const b of buggy) {
+        const g = gt.find((x: any) => x.id === b.id)!;
+        const ratio = g.c > 0 ? b.c / g.c : 1;
+        if (ratio > maxRatio) maxRatio = ratio;
+      }
+      assert.ok(maxRatio >= 10,
+        `buggy SQL 放大倍率应 ≥ 10 倍（实际 ${maxRatio.toFixed(1)}x）—— 如果这个断言失败，说明数据量太小或表结构已变，需重新评估复现条件`);
+      // 当前 findAllSensors 必须完全无放大（maxRatio ≈ 1.0）
+      const sensors = m.findAllSensors();
+      for (const s of sensors) {
+        const g = gt.find((x: any) => x.id === s.id)!;
+        assert.equal(s.readingCount, g.c,
+          `${s.id} 当前 readingCount 必须等于 GT，不能有任何放大`);
+      }
+    });
+
+    it('GET /api/sensors HTTP 路由返回值必须 === findAllSensors() 逐字段一致', async (t) => {
+      // 策略：不真正 listen 端口（测试环境下临时 Express 实例偶发超时），
+      // 而是直接构造 mock Request/Response，调用 sensors router 的 GET / handler。
+      // 这样既验证了 HTTP 路由层的字段映射，又不涉及网络层。
+      const sensorsRouter = await import('../api/routes/sensors.js');
+      // sensorsRouter 是 Router()，找到其 GET '/' 的 handler 栈中
+      // 最后一个（也就是业务 handler：调用 findAllSensors 并 res.json）
+      const router = sensorsRouter.default as any;
+      // 找到 GET / 这条路由的 handler：router.stack 里找 layer.route.path === '/' && methods.get
+      const getRootLayer = router.stack.find(
+        (l: any) => l.route && l.route.path === '/' && l.route.methods && l.route.methods.get,
+      );
+      assert.ok(getRootLayer, 'sensors router 必须有 GET / 路由');
+      const handlers = getRootLayer.route.stack as any[];
+      const businessHandler: any = handlers[handlers.length - 1]?.handle;
+      assert.ok(typeof businessHandler === 'function', 'GET / 最后一层必须是业务 handler');
+
+      // mock req/res
+      let statusCode = 0;
+      let jsonBody: any = undefined;
+      const mockReq = {} as any;
+      const mockRes = {
+        status(code: number) { statusCode = code; return this; },
+        json(body: any) { jsonBody = body; return this; },
+      } as any;
+      const mockNext = (e?: Error) => {
+        if (e) t.diagnostic(`next(${e.message})`);
+      };
+      await businessHandler(mockReq, mockRes, mockNext);
+
+      assert.ok(jsonBody, 'handler 必须调用 res.json 返回数据');
+      assert.ok(jsonBody.success, '必须 success=true');
+      const httpSensors: any[] = jsonBody.data;
+      const repoSensors = m.findAllSensors();
+      assert.equal(httpSensors.length, repoSensors.length, 'HTTP 数量 = Repo 数量');
+      for (const repo of repoSensors) {
+        const http = httpSensors.find((h) => h.id === repo.id);
+        assert.ok(http, `HTTP 必须包含传感器 ${repo.id}`);
+        assert.equal(http.readingCount, repo.readingCount,
+          `${repo.id} readingCount HTTP(${http.readingCount}) === Repo(${repo.readingCount})`);
+        assert.equal(http.anomalyCount, repo.anomalyCount,
+          `${repo.id} anomalyCount HTTP(${http.anomalyCount}) === Repo(${repo.anomalyCount})`);
+        assert.equal(http.pendingCount, repo.pendingCount,
+          `${repo.id} pendingCount HTTP(${http.pendingCount}) === Repo(${repo.pendingCount})`);
+        assert.equal(http.name, repo.name, `${repo.id} name 一致`);
+      }
     });
   });
 });
