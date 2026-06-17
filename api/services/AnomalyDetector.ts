@@ -99,7 +99,7 @@ export function detectFromReadings(
 
 export function runFullDetection(
   thresholdOverride?: ThresholdConfig,
-  options?: { beforeThreshold?: ThresholdConfig },
+  options?: { beforeThreshold?: ThresholdConfig; operator?: string },
 ): {
   totalAnalyzed: number;
   newAnomalies: number;
@@ -139,6 +139,7 @@ export function runFullDetection(
       action: 'THRESHOLD_UPDATE',
       entityType: 'threshold',
       entityId: '1',
+      operator: options.operator || 'system',
       before: options.beforeThreshold,
       after: threshold,
       detail: `阈值更新，重算完成：新增 ${newAnomalies} 条，保护人工结论 ${protectedRow?.c || 0} 条`,
@@ -149,5 +150,132 @@ export function runFullDetection(
     totalAnalyzed,
     newAnomalies,
     protectedCount: protectedRow?.c || 0,
+  };
+}
+
+export interface ThresholdPreviewResult {
+  affectedSensors: {
+    sensorId: string;
+    sensorName: string;
+    currentCount: number;
+    newCount: number;
+    delta: number;
+  }[];
+  byType: {
+    type: string;
+    currentCount: number;
+    newCount: number;
+    delta: number;
+  }[];
+  summary: {
+    currentTotal: number;
+    newTotal: number;
+    delta: number;
+    addedCount: number;
+    removedCount: number;
+    protectedCount: number;
+    totalReadings: number;
+  };
+}
+
+export function previewDetection(
+  newThreshold: ThresholdConfig,
+): ThresholdPreviewResult {
+  const _currentThreshold = getThresholdConfig();
+  const sensors = findAllSensors();
+
+  const currentUnprotected: any[] = db.prepare(`
+    SELECT a.id, a.sensor_id, a.type, a.reading_id
+    FROM anomalies a
+    WHERE a.has_manual_override = 0
+  `).all();
+
+  const protectedRow: any = db
+    .prepare('SELECT COUNT(*) as c FROM anomalies WHERE has_manual_override = 1')
+    .get();
+
+  const currentBySensor: Record<string, number> = {};
+  const currentByType: Record<string, number> = {};
+  const currentReadingIds = new Set<string>();
+
+  for (const a of currentUnprotected) {
+    currentBySensor[a.sensor_id] = (currentBySensor[a.sensor_id] || 0) + 1;
+    currentByType[a.type] = (currentByType[a.type] || 0) + 1;
+    currentReadingIds.add(a.reading_id);
+  }
+
+  const newBySensor: Record<string, number> = {};
+  const newByType: Record<string, number> = {};
+  const newReadingIds = new Set<string>();
+  let totalReadings = 0;
+
+  for (const s of sensors) {
+    const readings = findReadingsBySensor(s.id);
+    totalReadings += readings.length;
+    const detected = detectFromReadings(readings, newThreshold);
+    for (const d of detected) {
+      newBySensor[d.sensorId] = (newBySensor[d.sensorId] || 0) + 1;
+      newByType[d.type] = (newByType[d.type] || 0) + 1;
+      newReadingIds.add(d.readingId);
+    }
+  }
+
+  const allSensorIds = new Set([...Object.keys(currentBySensor), ...Object.keys(newBySensor)]);
+  const allTypes = new Set([...Object.keys(currentByType), ...Object.keys(newByType)]);
+
+  const affectedSensors: ThresholdPreviewResult['affectedSensors'] = [];
+  for (const sid of allSensorIds) {
+    const sensor = sensors.find((s) => s.id === sid);
+    const cur = currentBySensor[sid] || 0;
+    const nw = newBySensor[sid] || 0;
+    if (cur !== nw) {
+      affectedSensors.push({
+        sensorId: sid,
+        sensorName: sensor?.name || sid,
+        currentCount: cur,
+        newCount: nw,
+        delta: nw - cur,
+      });
+    }
+  }
+  affectedSensors.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+
+  const byType: ThresholdPreviewResult['byType'] = [];
+  for (const t of allTypes) {
+    const cur = currentByType[t] || 0;
+    const nw = newByType[t] || 0;
+    byType.push({
+      type: t,
+      currentCount: cur,
+      newCount: nw,
+      delta: nw - cur,
+    });
+  }
+  byType.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+
+  const currentTotal = currentUnprotected.length;
+  const newTotal = Array.from(newReadingIds).length;
+
+  let addedCount = 0;
+  for (const rid of newReadingIds) {
+    if (!currentReadingIds.has(rid)) addedCount++;
+  }
+  let removedCount = 0;
+  for (const rid of currentReadingIds) {
+    if (!newReadingIds.has(rid)) removedCount++;
+  }
+
+  return {
+    affectedSensors,
+    byType,
+    summary: {
+      currentTotal,
+      newTotal,
+      delta: newTotal - currentTotal,
+      addedCount,
+      removedCount,
+      protectedCount: protectedRow?.c || 0,
+      totalReadings,
+    },
   };
 }

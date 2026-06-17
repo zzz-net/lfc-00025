@@ -6,8 +6,9 @@ import {
 import {
   insertAnnotation,
 } from '../repositories/AnnotationRepo.js';
-import { runFullDetection } from '../services/AnomalyDetector.js';
+import { runFullDetection, previewDetection } from '../services/AnomalyDetector.js';
 import { getThresholdConfig, updateThresholdConfig } from '../repositories/ConfigRepo.js';
+import { findAuditLogsByEntity } from '../repositories/AuditLogRepo.js';
 import { generateId } from '../utils/fileHash.js';
 import type { AnnotationStatus, ThresholdConfig } from '../../shared/types.js';
 
@@ -32,7 +33,7 @@ router.post('/detect', (req: Request, res: Response) => {
   res.json({ success: true, data: stats });
 });
 
-router.put('/thresholds', (req: Request, res: Response) => {
+router.post('/thresholds/preview', (req: Request, res: Response) => {
   const body = req.body as Partial<ThresholdConfig>;
   const current = getThresholdConfig();
   const merged: ThresholdConfig = { ...current, ...body };
@@ -53,8 +54,42 @@ router.put('/thresholds', (req: Request, res: Response) => {
     res.status(400).json({ success: false, error: '阈值配置不合法' });
     return;
   }
+  const preview = previewDetection(merged);
+  res.json({ success: true, data: preview });
+});
+
+router.get('/thresholds/history', (req: Request, res: Response) => {
+  const limit = Number(req.query.limit) || 50;
+  const logs = findAuditLogsByEntity('threshold', '1', limit);
+  res.json({ success: true, data: logs });
+});
+
+router.put('/thresholds', (req: Request, res: Response) => {
+  const body = req.body as Partial<ThresholdConfig> & { operator?: string };
+  const current = getThresholdConfig();
+  const merged: ThresholdConfig = { ...current, ...body };
+  const valid =
+    typeof merged.tempMin === 'number' &&
+    typeof merged.tempMax === 'number' &&
+    typeof merged.humidMin === 'number' &&
+    typeof merged.humidMax === 'number' &&
+    typeof merged.tempDriftThreshold === 'number' &&
+    typeof merged.humidDriftThreshold === 'number' &&
+    typeof merged.gapThresholdSeconds === 'number' &&
+    merged.tempMin < merged.tempMax &&
+    merged.humidMin < merged.humidMax &&
+    merged.tempDriftThreshold >= 0 &&
+    merged.humidDriftThreshold >= 0 &&
+    merged.gapThresholdSeconds >= 1;
+  if (!valid) {
+    res.status(400).json({ success: false, error: '阈值配置不合法' });
+    return;
+  }
   const updated = updateThresholdConfig(merged);
-  const stats = runFullDetection(updated, { beforeThreshold: current });
+  const stats = runFullDetection(updated, {
+    beforeThreshold: current,
+    operator: body.operator,
+  });
   res.json({ success: true, data: { threshold: updated, detectionStats: stats } });
 });
 

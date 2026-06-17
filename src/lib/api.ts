@@ -1,6 +1,7 @@
 import type {
   Sensor, Reading, Anomaly, Annotation, ThresholdConfig,
   ImportResponse, ImportBatch, AppState, AnnotationStatus,
+  ThresholdPreviewResult, AuditLog,
 } from '../../shared/types.js';
 
 const BASE = '/api';
@@ -71,7 +72,14 @@ export const api = {
       }),
     detect: () => req<{ success: boolean; data: any }>('/anomalies/detect', { method: 'POST' }),
     thresholds: () => req<{ success: boolean; data: ThresholdConfig }>('/anomalies/thresholds'),
-    updateThresholds: (body: Partial<ThresholdConfig>) =>
+    previewThresholds: (body: Partial<ThresholdConfig>) =>
+      req<{ success: boolean; data: ThresholdPreviewResult }>(
+        '/anomalies/thresholds/preview',
+        { method: 'POST', body: JSON.stringify(body) },
+      ),
+    thresholdHistory: (limit = 50) =>
+      req<{ success: boolean; data: AuditLog[] }>(`/anomalies/thresholds/history?limit=${limit}`),
+    updateThresholds: (body: Partial<ThresholdConfig> & { operator?: string }) =>
       req<{ success: boolean; data: { threshold: ThresholdConfig; detectionStats: any } }>(
         '/anomalies/thresholds',
         { method: 'PUT', body: JSON.stringify(body) },

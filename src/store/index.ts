@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import api from '@/lib/api';
 import type {
   Sensor, Reading, Anomaly, Annotation, ThresholdConfig,
-  AnnotationStatus,
+  AnnotationStatus, ThresholdPreviewResult, AuditLog,
 } from '../../shared/types.js';
 
 interface Toast {
@@ -18,6 +18,8 @@ interface QCStore {
   anomalies: Anomaly[];
   annotationsHistory: Annotation[];
   thresholds: ThresholdConfig;
+  thresholdPreview: ThresholdPreviewResult | null;
+  thresholdHistory: AuditLog[];
   statusFilter: 'ALL' | AnnotationStatus;
   timeRange: 'ALL' | '1H' | '24H' | '7D' | 'CUSTOM';
   customStart?: string;
@@ -32,7 +34,9 @@ interface QCStore {
   loadReadings: (id: string) => Promise<void>;
   loadAnomalies: (sensorId?: string) => Promise<void>;
   loadThresholds: () => Promise<void>;
-  updateThresholds: (cfg: Partial<ThresholdConfig>) => Promise<void>;
+  previewThresholds: (cfg: Partial<ThresholdConfig>) => Promise<ThresholdPreviewResult | null>;
+  loadThresholdHistory: () => Promise<void>;
+  updateThresholds: (cfg: Partial<ThresholdConfig> & { operator?: string }) => Promise<void>;
   annotate: (anomalyId: string, body: { status: AnnotationStatus; handler: string; reason: string }) => Promise<void>;
   rollbackLast: (reason?: string) => Promise<void>;
   loadAnnotationHistory: () => Promise<void>;
@@ -46,6 +50,7 @@ interface QCStore {
   _setLoading: (key: string, v: boolean) => void;
   getTimeRangeParams: () => { start?: string; end?: string };
   exportReport: (type: 'csv' | 'pdf') => Promise<void>;
+  clearThresholdPreview: () => void;
 }
 
 const DEFAULT_THRESHOLDS: ThresholdConfig = {
@@ -60,6 +65,8 @@ export const useQCStore = create<QCStore>((set, get) => ({
   anomalies: [],
   annotationsHistory: [],
   thresholds: DEFAULT_THRESHOLDS,
+  thresholdPreview: null,
+  thresholdHistory: [],
   statusFilter: 'ALL',
   timeRange: 'ALL',
   customStart: undefined,
@@ -145,16 +152,41 @@ export const useQCStore = create<QCStore>((set, get) => ({
     } catch { /* ignore */ }
   },
 
+  previewThresholds: async (cfg) => {
+    get()._setLoading('thresholdPreview', true);
+    try {
+      const res = await api.anomalies.previewThresholds(cfg);
+      set({ thresholdPreview: res.data });
+      return res.data;
+    } catch (e: any) {
+      get().addToast({ type: 'error', message: '预览失败: ' + e.message });
+      return null;
+    } finally {
+      get()._setLoading('thresholdPreview', false);
+    }
+  },
+
+  loadThresholdHistory: async () => {
+    try {
+      const res = await api.anomalies.thresholdHistory();
+      set({ thresholdHistory: res.data });
+    } catch { /* ignore */ }
+  },
+
+  clearThresholdPreview: () => {
+    set({ thresholdPreview: null });
+  },
+
   updateThresholds: async (cfg) => {
     get()._setLoading('thresholds', true);
     try {
       const res = await api.anomalies.updateThresholds(cfg);
-      set({ thresholds: res.data.threshold });
+      set({ thresholds: res.data.threshold, thresholdPreview: null });
       get().addToast({
         type: 'success',
         message: `阈值已更新，重算异常完成：新增 ${res.data.detectionStats.newAnomalies} 条，保护人工结论 ${res.data.detectionStats.protectedCount} 条`,
       });
-      await get().loadAnomalies();
+      await Promise.all([get().loadAnomalies(), get().loadThresholdHistory()]);
       const sel = get().selectedSensorId;
       if (sel) await get().loadReadings(sel);
       await get().loadSensors();
@@ -261,7 +293,9 @@ export const useQCStore = create<QCStore>((set, get) => ({
           customEnd: st.customEnd,
         });
       }
-      await Promise.all([get().loadSensors(), get().loadThresholds(), get().loadAnnotationHistory()]);
+      await Promise.all([
+        get().loadSensors(), get().loadThresholds(), get().loadAnnotationHistory(), get().loadThresholdHistory()
+      ]);
       await get().loadAnomalies();
     } finally {
       get()._setLoading('all', false);

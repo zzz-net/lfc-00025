@@ -154,3 +154,51 @@ export const STATUS_COLORS: Record<AnnotationStatus, string> = {
   FALSE_POSITIVE: '#6B7280',
   RETEST: '#3B82F6',
 };
+
+export type AuditAction =
+  | 'ANNOTATE_CREATE'
+  | 'ANNOTATE_ROLLBACK'
+  | 'THRESHOLD_UPDATE'
+  | 'IMPORT_BATCH'
+  | 'ANOMALY_DETECT'
+  | 'STATE_SAVE'
+  | 'REPORT_EXPORT';
+
+export interface AuditLog {
+  id: string;
+  action: AuditAction;
+  entityType: string;
+  entityId?: string;
+  operator: string;
+  beforeJson?: any;
+  afterJson?: any;
+  before?: any;
+  after?: any;
+  detail?: string;
+  createdAt: string;
+}
+
+export interface ThresholdPreviewResult {
+  affectedSensors: {
+    sensorId: string;
+    sensorName: string;
+    currentCount: number;
+    newCount: number;
+    delta: number;
+  }[];
+  byType: {
+    type: string;
+    currentCount: number;
+    newCount: number;
+    delta: number;
+  }[];
+  summary: {
+    currentTotal: number;
+    newTotal: number;
+    delta: number;
+    addedCount: number;
+    removedCount: number;
+    protectedCount: number;
+    totalReadings: number;
+  };
+}

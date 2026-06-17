@@ -480,11 +480,11 @@ describe('硬伤回归：生产启动链路 + 筛选导出一致性', () => {
       assert.ok(typeof businessHandler === 'function', 'GET / 最后一层必须是业务 handler');
 
       // mock req/res
-      let statusCode = 0;
+      let _statusCode = 0;
       let jsonBody: any = undefined;
       const mockReq = {} as any;
       const mockRes = {
-        status(code: number) { statusCode = code; return this; },
+        status(code: number) { _statusCode = code; return this; },
         json(body: any) { jsonBody = body; return this; },
       } as any;
       const mockNext = (e?: Error) => {

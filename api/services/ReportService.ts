@@ -18,6 +18,7 @@ export interface ReportFilter {
 
 export function generateCsvReport(filter: ReportFilter = {}): string {
   const anomalies = findAllAnomalies(filter.sensorId, filter.statusFilter, filter.timeRange);
+  const threshold = getThresholdConfig();
   const rows = anomalies.map((a) => ({
     异常ID: a.id.substring(0, 12),
     传感器: a.sensorName,
@@ -36,7 +37,18 @@ export function generateCsvReport(filter: ReportFilter = {}): string {
     回滚原因: a.latestAnnotation?.rollbackReason || '',
   }));
 
-  let csv = Papa.unparse(rows);
+  let csv = `===== 报告生成时生效的阈值配置 =====\n`;
+  csv += Papa.unparse([
+    { 配置项: '温度下限 (℃)', 数值: threshold.tempMin },
+    { 配置项: '温度上限 (℃)', 数值: threshold.tempMax },
+    { 配置项: '湿度下限 (%)', 数值: threshold.humidMin },
+    { 配置项: '湿度上限 (%)', 数值: threshold.humidMax },
+    { 配置项: '温度漂移阈值 (℃)', 数值: threshold.tempDriftThreshold },
+    { 配置项: '湿度漂移阈值 (%)', 数值: threshold.humidDriftThreshold },
+    { 配置项: '断点时间阈值 (秒)', 数值: threshold.gapThresholdSeconds },
+  ]);
+  csv += '\n\n===== 异常明细 =====\n';
+  csv += Papa.unparse(rows);
 
   const history = findAnnotationHistoryByFilter(500, filter);
   csv += '\n\n===== 标注历史 =====\n';
