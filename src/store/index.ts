@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import api from '@/lib/api';
 import type {
   Sensor, Reading, Anomaly, Annotation, ThresholdConfig,
-  AppState, AnnotationStatus,
+  AnnotationStatus,
 } from '../../shared/types.js';
 
 interface Toast {
@@ -45,6 +45,7 @@ interface QCStore {
   persistState: () => Promise<void>;
   _setLoading: (key: string, v: boolean) => void;
   getTimeRangeParams: () => { start?: string; end?: string };
+  exportReport: (type: 'csv' | 'pdf') => Promise<void>;
 }
 
 const DEFAULT_THRESHOLDS: ThresholdConfig = {
@@ -165,7 +166,7 @@ export const useQCStore = create<QCStore>((set, get) => ({
 
   annotate: async (anomalyId, body) => {
     try {
-      const res = await api.anomalies.annotate(anomalyId, body);
+      await api.anomalies.annotate(anomalyId, body);
       get().addToast({ type: 'success', message: '标注成功' });
       await Promise.all([get().loadAnomalies(), get().loadSensors(), get().loadAnnotationHistory()]);
     } catch (e: any) {
@@ -262,6 +263,27 @@ export const useQCStore = create<QCStore>((set, get) => ({
       await get().loadAnomalies();
     } finally {
       get()._setLoading('all', false);
+    }
+  },
+
+  exportReport: async (type) => {
+    try {
+      const { selectedSensorId, statusFilter, timeRange, customStart, customEnd } = get();
+      const filter = {
+        sensorId: selectedSensorId,
+        statusFilter,
+        timeRange,
+        customStart,
+        customEnd,
+      };
+      if (type === 'csv') {
+        await api.report.downloadCsv(filter);
+      } else {
+        await api.report.downloadPdf(filter);
+      }
+      get().addToast({ type: 'success', message: `${type.toUpperCase()} 报告导出成功，筛选条件已应用` });
+    } catch (e: any) {
+      get().addToast({ type: 'error', message: '导出失败: ' + e.message });
     }
   },
 }));

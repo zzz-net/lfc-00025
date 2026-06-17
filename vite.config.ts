@@ -30,14 +30,15 @@ export default defineConfig({
         target: 'http://localhost:3001',
         changeOrigin: true,
         secure: false,
-        configure: (proxy, _options) => {
-          proxy.on('error', (err, _req, _res) => {
-            console.log('proxy error', err);
+        configure: (proxy) => {
+          proxy.on('error', (err, req, res) => {
+            console.log('proxy error', err, req?.url, res?.statusCode);
           });
-          proxy.on('proxyReq', (proxyReq, req, _res) => {
+          proxy.on('proxyReq', (proxyReq, req) => {
             console.log('Sending Request to the Target:', req.method, req.url);
+            void proxyReq;
           });
-          proxy.on('proxyRes', (proxyRes, req, _res) => {
+          proxy.on('proxyRes', (proxyRes, req) => {
             console.log('Received Response from the Target:', proxyRes.statusCode, req.url);
           });
         },

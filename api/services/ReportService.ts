@@ -5,13 +5,19 @@ const jsPDFConstructor = (jsPDF as any).default || jsPDF;
 const autoTableFn = (autoTable as any).default || autoTable;
 import { findAllSensors } from '../repositories/SensorRepo.js';
 import { findAllAnomalies } from '../repositories/AnomalyRepo.js';
-import { findAnnotationHistory } from '../repositories/AnnotationRepo.js';
+import { findAnnotationHistoryByFilter } from '../repositories/AnnotationRepo.js';
 import { getThresholdConfig } from '../repositories/ConfigRepo.js';
 import { countReadings } from '../repositories/ReadingRepo.js';
-import { ANOMALY_TYPE_LABELS, STATUS_LABELS } from '../../shared/types.js';
+import { ANOMALY_TYPE_LABELS, STATUS_LABELS, type AnnotationStatus } from '../../shared/types.js';
 
-export function generateCsvReport(): string {
-  const anomalies = findAllAnomalies();
+export interface ReportFilter {
+  sensorId?: string;
+  statusFilter?: 'ALL' | AnnotationStatus;
+  timeRange?: { start?: string; end?: string };
+}
+
+export function generateCsvReport(filter: ReportFilter = {}): string {
+  const anomalies = findAllAnomalies(filter.sensorId, filter.statusFilter, filter.timeRange);
   const rows = anomalies.map((a) => ({
     异常ID: a.id.substring(0, 12),
     传感器: a.sensorName,
@@ -32,7 +38,7 @@ export function generateCsvReport(): string {
 
   let csv = Papa.unparse(rows);
 
-  const history = findAnnotationHistory(500);
+  const history = findAnnotationHistoryByFilter(500, filter);
   csv += '\n\n===== 标注历史 =====\n';
   csv += Papa.unparse(history.map((h) => ({
     标注ID: h.id.substring(0, 12),
@@ -50,13 +56,13 @@ export function generateCsvReport(): string {
   return csv;
 }
 
-export function generatePdfReport(): Uint8Array {
+export function generatePdfReport(filter: ReportFilter = {}): Uint8Array {
   const doc = new jsPDFConstructor({ orientation: 'landscape', unit: 'pt', format: 'a4' });
   const sensors = findAllSensors();
-  const anomalies = findAllAnomalies();
+  const anomalies = findAllAnomalies(filter.sensorId, filter.statusFilter, filter.timeRange);
   const threshold = getThresholdConfig();
   const totalReadings = countReadings();
-  const history = findAnnotationHistory(200);
+  const history = findAnnotationHistoryByFilter(200, filter);
 
   const pageWidth = doc.internal.pageSize.getWidth();
   doc.setFont('helvetica', 'bold');

@@ -6,7 +6,7 @@ import app from './app.js';
 /**
  * start server with port
  */
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || (process.env.NODE_ENV === 'production' ? 3000 : 3001);
 
 const server = app.listen(PORT, () => {
   console.log(`Server ready on port ${PORT}`);

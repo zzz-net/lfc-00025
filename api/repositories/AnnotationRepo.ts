@@ -1,6 +1,7 @@
 import { db } from '../data/db.js';
 import type { Annotation, AnnotationStatus } from '../../shared/types.js';
-import { clearAnomalyOverridden, markAnomalyOverridden } from './AnomalyRepo.js';
+import { clearAnomalyOverridden, markAnomalyOverridden, findAnomalyById } from './AnomalyRepo.js';
+import { insertAuditLog } from './AuditLogRepo.js';
 
 export function insertAnnotation(annotation: {
   id: string;
@@ -9,6 +10,7 @@ export function insertAnnotation(annotation: {
   handler: string;
   reason: string;
 }): Annotation {
+  const before = findAnomalyById(annotation.anomalyId);
   db.prepare(`
     INSERT INTO annotations (id, anomaly_id, status, handler, reason, created_at)
     VALUES (@id, @anomalyId, @status, @handler, @reason, datetime('now'))
@@ -20,7 +22,17 @@ export function insertAnnotation(annotation: {
     reason: annotation.reason,
   });
   markAnomalyOverridden(annotation.anomalyId);
-  return findAnnotationById(annotation.id)!;
+  const result = findAnnotationById(annotation.id)!;
+  insertAuditLog({
+    action: 'ANNOTATE_CREATE',
+    entityType: 'anomaly',
+    entityId: annotation.anomalyId,
+    operator: annotation.handler,
+    before,
+    after: { status: annotation.status, handler: annotation.handler, reason: annotation.reason },
+    detail: `异常 ${annotation.anomalyId.substring(0, 12)} 标注为 ${annotation.status}`,
+  });
+  return result;
 }
 
 export function findAnnotationById(id: string): Annotation | null {
@@ -54,6 +66,7 @@ export function findLatestAnnotation(): Annotation | null {
 export function rollbackLatestAnnotation(reason: string): Annotation | null {
   const latest = findLatestAnnotation();
   if (!latest) return null;
+  const before = findAnomalyById(latest.anomalyId);
   db.prepare(`
     UPDATE annotations
     SET rolled_back_at = datetime('now'), rollback_reason = ?
@@ -68,7 +81,17 @@ export function rollbackLatestAnnotation(reason: string): Annotation | null {
     clearAnomalyOverridden(latest.anomalyId);
   }
 
-  return findAnnotationById(latest.id);
+  const result = findAnnotationById(latest.id);
+  insertAuditLog({
+    action: 'ANNOTATE_ROLLBACK',
+    entityType: 'annotation',
+    entityId: latest.id,
+    operator: latest.handler,
+    before,
+    after: { rolledBack: true, rollbackReason: reason },
+    detail: `回滚标注 ${latest.id.substring(0, 12)}，原因: ${reason || '未填写'}`,
+  });
+  return result;
 }
 
 export function findAnnotationHistory(limit = 100): Annotation[] {
@@ -81,6 +104,48 @@ export function findAnnotationHistory(limit = 100): Annotation[] {
     ORDER BY ann.created_at DESC
     LIMIT ?
   `).all(limit);
+  return rows.map(rowToAnnotation);
+}
+
+export function findAnnotationHistoryByFilter(
+  limit = 100,
+  filter?: {
+    sensorId?: string;
+    statusFilter?: 'ALL' | any;
+    timeRange?: { start?: string; end?: string };
+  },
+): Annotation[] {
+  let sql = `
+    SELECT ann.*, a.type as anomaly_type, s.name as sensor_name, r.timestamp
+    FROM annotations ann
+    JOIN anomalies a ON a.id = ann.anomaly_id
+    JOIN sensors s ON s.id = a.sensor_id
+    JOIN readings r ON r.id = a.reading_id
+  `;
+  const where: string[] = [];
+  const params: any[] = [];
+
+  if (filter?.sensorId) {
+    where.push('a.sensor_id = ?');
+    params.push(filter.sensorId);
+  }
+  if (filter?.timeRange?.start) {
+    where.push('r.timestamp >= ?');
+    params.push(filter.timeRange.start);
+  }
+  if (filter?.timeRange?.end) {
+    where.push('r.timestamp <= ?');
+    params.push(filter.timeRange.end);
+  }
+
+  if (where.length > 0) {
+    sql += ' WHERE ' + where.join(' AND ');
+  }
+
+  sql += ' ORDER BY ann.created_at DESC LIMIT ?';
+  params.push(limit);
+
+  const rows: any[] = db.prepare(sql).all(...params);
   return rows.map(rowToAnnotation);
 }
 

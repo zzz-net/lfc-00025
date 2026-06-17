@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import useQCStore from '@/store';
-import type { Anomaly, Annotation, AnnotationStatus, AnomalyType } from '../../shared/types.js';
+import type { Anomaly, Annotation, AnnotationStatus } from '../../shared/types.js';
 import { ANOMALY_TYPE_LABELS, ANOMALY_TYPE_COLORS, STATUS_LABELS, STATUS_COLORS } from '../../shared/types.js';
 import { AlertTriangle, Filter, Undo2, Tag, User, MessageSquare, Clock, Search, ChevronDown, ChevronUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -12,7 +12,6 @@ export default function AnomalyPanel({ onAnnotate }: { onAnnotate: (a: Anomaly) 
   const loading = useQCStore((s) => s.loading.anomalies);
   const history = useQCStore((s) => s.annotationsHistory);
   const rollback = useQCStore((s) => s.rollbackLast);
-  const sensors = useQCStore((s) => s.sensors);
   const selectedId = useQCStore((s) => s.selectedSensorId);
 
   const [tab, setTab] = useState<'anomalies' | 'history'>('anomalies');

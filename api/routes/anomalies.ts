@@ -5,9 +5,6 @@ import {
 } from '../repositories/AnomalyRepo.js';
 import {
   insertAnnotation,
-  findAnnotationHistory,
-  findLatestAnnotation,
-  rollbackLatestAnnotation,
 } from '../repositories/AnnotationRepo.js';
 import { runFullDetection } from '../services/AnomalyDetector.js';
 import { getThresholdConfig, updateThresholdConfig } from '../repositories/ConfigRepo.js';
@@ -54,7 +51,7 @@ router.put('/thresholds', (req: Request, res: Response) => {
     return;
   }
   const updated = updateThresholdConfig(merged);
-  const stats = runFullDetection(updated);
+  const stats = runFullDetection(updated, { beforeThreshold: current });
   res.json({ success: true, data: { threshold: updated, detectionStats: stats } });
 });
 

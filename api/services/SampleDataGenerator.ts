@@ -1,5 +1,5 @@
 import Papa from 'papaparse';
-import type { Sensor, Reading } from '../../shared/types.js';
+import type { Sensor } from '../../shared/types.js';
 
 interface SampleSensor {
   id: string;
@@ -29,8 +29,8 @@ function seededRandom(seed: number): () => number {
 export function generateSampleCsv(): string {
   const rows: Record<string, any>[] = [];
   const rand = seededRandom(20240601);
-  const now = new Date();
-  const startTime = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const endTime = new Date('2025-05-07T23:55:00.000Z');
+  const startTime = new Date('2025-05-01T00:00:00.000Z');
 
   for (const s of SAMPLE_SENSORS) {
     let t = new Date(startTime);
@@ -38,7 +38,7 @@ export function generateSampleCsv(): string {
     let prevTemp = s.baseTemp;
     let prevHumid = s.baseHumid;
 
-    while (t.getTime() <= now.getTime()) {
+    while (t.getTime() <= endTime.getTime()) {
       let temp = s.baseTemp + (rand() - 0.5) * 0.8;
       let humid = s.baseHumid + (rand() - 0.5) * 4;
 

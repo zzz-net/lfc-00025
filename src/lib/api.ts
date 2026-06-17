@@ -87,8 +87,18 @@ export const api = {
     csv: () => window.open(BASE + '/report/csv', '_blank'),
     pdf: () => window.open(BASE + '/report/pdf', '_blank'),
     list: () => req<{ success: boolean; data: any[] }>('/report/list'),
-    downloadCsv: async () => {
-      const res = await fetch(BASE + '/report/csv', { method: 'POST' });
+    downloadCsv: async (filter?: {
+      sensorId?: string | null;
+      statusFilter?: any;
+      timeRange?: any;
+      customStart?: string;
+      customEnd?: string;
+    }) => {
+      const res = await fetch(BASE + '/report/csv', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: filter ? JSON.stringify(filter) : undefined,
+      });
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -97,8 +107,18 @@ export const api = {
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     },
-    downloadPdf: async () => {
-      const res = await fetch(BASE + '/report/pdf', { method: 'POST' });
+    downloadPdf: async (filter?: {
+      sensorId?: string | null;
+      statusFilter?: any;
+      timeRange?: any;
+      customStart?: string;
+      customEnd?: string;
+    }) => {
+      const res = await fetch(BASE + '/report/pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: filter ? JSON.stringify(filter) : undefined,
+      });
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');

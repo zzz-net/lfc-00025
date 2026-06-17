@@ -3,7 +3,7 @@ import type { Reading } from '../../shared/types.js';
 
 export function insertReading(reading: Reading): void {
   db.prepare(`
-    INSERT INTO readings (id, sensor_id, timestamp, temperature, humidity, batch_id, raw_row)
+    INSERT OR IGNORE INTO readings (id, sensor_id, timestamp, temperature, humidity, batch_id, raw_row)
     VALUES (@id, @sensorId, @timestamp, @temperature, @humidity, @batchId, @rawRow)
   `).run({
     id: reading.id,
@@ -16,15 +16,16 @@ export function insertReading(reading: Reading): void {
   });
 }
 
-export function insertReadings(readings: Reading[]): void {
-  if (readings.length === 0) return;
+export function insertReadings(readings: Reading[]): number {
+  if (readings.length === 0) return 0;
   const stmt = db.prepare(`
-    INSERT INTO readings (id, sensor_id, timestamp, temperature, humidity, batch_id, raw_row)
+    INSERT OR IGNORE INTO readings (id, sensor_id, timestamp, temperature, humidity, batch_id, raw_row)
     VALUES (@id, @sensorId, @timestamp, @temperature, @humidity, @batchId, @rawRow)
   `);
+  let inserted = 0;
   const tx = db.transaction((list: Reading[]) => {
     for (const r of list) {
-      stmt.run({
+      const info = stmt.run({
         id: r.id,
         sensorId: r.sensorId,
         timestamp: r.timestamp,
@@ -33,9 +34,11 @@ export function insertReadings(readings: Reading[]): void {
         batchId: r.batchId,
         rawRow: r.rawRow ?? null,
       });
+      if (info.changes > 0) inserted++;
     }
   });
   tx(readings);
+  return inserted;
 }
 
 export function findReadingsBySensor(

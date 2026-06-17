@@ -6,8 +6,12 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DATA_DIR = path.resolve(__dirname, '..', '..', 'data');
-const DB_PATH = path.join(DATA_DIR, 'qc_sensors.db');
+const DATA_DIR = process.env.QC_DATA_DIR
+  ? path.resolve(process.env.QC_DATA_DIR)
+  : path.resolve(__dirname, '..', '..', 'data');
+const DB_PATH = process.env.QC_DB_PATH
+  ? path.resolve(process.env.QC_DB_PATH)
+  : path.join(DATA_DIR, 'qc_sensors.db');
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -46,7 +50,7 @@ CREATE TABLE IF NOT EXISTS readings (
     batch_id TEXT NOT NULL REFERENCES import_batches(id),
     raw_row INTEGER
 );
-CREATE INDEX IF NOT EXISTS idx_readings_sensor_time ON readings(sensor_id, timestamp);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_readings_sensor_time_unique ON readings(sensor_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_readings_batch ON readings(batch_id);
 
 CREATE TABLE IF NOT EXISTS anomalies (
@@ -64,7 +68,7 @@ CREATE INDEX IF NOT EXISTS idx_anomalies_reading ON anomalies(reading_id);
 
 CREATE TABLE IF NOT EXISTS annotations (
     id TEXT PRIMARY KEY,
-    anomaly_id TEXT NOT NULL REFERENCES anomalies(id),
+    anomaly_id TEXT NOT NULL REFERENCES anomalies(id) ON DELETE CASCADE,
     status TEXT NOT NULL,
     handler TEXT NOT NULL,
     reason TEXT NOT NULL,
@@ -93,6 +97,21 @@ CREATE TABLE IF NOT EXISTS app_state (
     view_json TEXT NOT NULL DEFAULT '{}',
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id TEXT PRIMARY KEY,
+    action TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT,
+    operator TEXT NOT NULL DEFAULT 'system',
+    before_json TEXT,
+    after_json TEXT,
+    detail TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
 `;
 
 db.exec(DDL);

@@ -8,6 +8,7 @@ import {
 import { getThresholdConfig } from '../repositories/ConfigRepo.js';
 import { generateId } from '../utils/fileHash.js';
 import { db } from '../data/db.js';
+import { insertAuditLog } from '../repositories/AuditLogRepo.js';
 
 export interface DetectedAnomaly {
   readingId: string;
@@ -96,7 +97,10 @@ export function detectFromReadings(
   return results;
 }
 
-export function runFullDetection(thresholdOverride?: ThresholdConfig): {
+export function runFullDetection(
+  thresholdOverride?: ThresholdConfig,
+  options?: { beforeThreshold?: ThresholdConfig },
+): {
   totalAnalyzed: number;
   newAnomalies: number;
   protectedCount: number;
@@ -129,6 +133,17 @@ export function runFullDetection(thresholdOverride?: ThresholdConfig): {
   const protectedRow: any = db
     .prepare('SELECT COUNT(*) as c FROM anomalies WHERE has_manual_override = 1')
     .get();
+
+  if (options?.beforeThreshold) {
+    insertAuditLog({
+      action: 'THRESHOLD_UPDATE',
+      entityType: 'threshold',
+      entityId: '1',
+      before: options.beforeThreshold,
+      after: threshold,
+      detail: `阈值更新，重算完成：新增 ${newAnomalies} 条，保护人工结论 ${protectedRow?.c || 0} 条`,
+    });
+  }
 
   return {
     totalAnalyzed,

@@ -5,12 +5,16 @@
   "type": "module",
   "scripts": {
     "client:dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc --noEmit && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
     "check": "tsc --noEmit",
     "server:dev": "nodemon",
-    "dev": "concurrently \"npm run client:dev\" \"npm run server:dev\""
+    "dev": "concurrently \"npm run client:dev\" \"npm run server:dev\"",
+    "server:start": "tsx api/server.ts",
+    "start": "cross-env NODE_ENV=production npm run server:start",
+    "test": "tsx --test tests/qc-closed-loop.test.ts 2>&1",
+    "test:ci": "tsx --test tests/qc-closed-loop.test.ts"
   },
   "dependencies": {
     "clsx": "^2.1.1",

@@ -7,6 +7,7 @@ import { parseCsvContent, parseJsonContent } from '../utils/csvParser.js';
 import { getThresholdConfig } from '../repositories/ConfigRepo.js';
 import { detectFromReadings } from './AnomalyDetector.js';
 import { insertAnomaly } from '../repositories/AnomalyRepo.js';
+import { insertAuditLog } from '../repositories/AuditLogRepo.js';
 import { generateSampleCsv } from './SampleDataGenerator.js';
 
 export function importContent(
@@ -93,8 +94,9 @@ function performImport(
     errorCount: errors.length,
     errors,
   });
-  insertReadings(readings);
+  const inserted = insertReadings(readings);
 
+  let anomalyCount = 0;
   for (const [, rs] of sensorReadingsMap) {
     const detected = detectFromReadings(rs, threshold);
     for (const d of detected) {
@@ -106,8 +108,26 @@ function performImport(
         description: d.description,
         thresholdSnapshot: threshold,
       });
+      anomalyCount++;
     }
   }
+
+  insertAuditLog({
+    action: 'IMPORT_BATCH',
+    entityType: 'batch',
+    entityId: batchId,
+    after: {
+      fileName,
+      totalRows: readings.length + errors.length,
+      validRows: readings.length,
+      insertedRows: inserted,
+      skippedDuplicates: readings.length - inserted,
+      sensorCount: sensorList.length,
+      errorCount: errors.length,
+      anomalyCount,
+    },
+    detail: `导入批次 ${batchId.substring(0, 12)}: ${fileName}, 有效${readings.length}行, 实际插入${inserted}行(重复${readings.length - inserted}行), ${sensorList.length}台传感器, 检出${anomalyCount}条异常`,
+  });
 }
 
 export function importSampleData(): ImportResponse {

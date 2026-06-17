@@ -13,8 +13,7 @@ export default function TopNav() {
   const sensors = useQCStore((s) => s.sensors);
   const anomalies = useQCStore((s) => s.anomalies);
   const loading = useQCStore((s) => s.loading);
-  const downloadCsv = useQCStore(() => {});
-  const downloadPdf = useQCStore(() => {});
+  const exportReport = useQCStore((s) => s.exportReport);
 
   const [thresholdOpen, setThresholdOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -23,9 +22,7 @@ export default function TopNav() {
   const doExport = async (type: 'csv' | 'pdf') => {
     setExporting(type);
     try {
-      const { api } = await import('@/lib/api.js');
-      if (type === 'csv') await api.report.downloadCsv();
-      else await api.report.downloadPdf();
+      await exportReport(type);
     } catch (e: any) {
       useQCStore.getState().addToast({ type: 'error', message: '导出失败: ' + e.message });
     } finally {

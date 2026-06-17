@@ -111,7 +111,7 @@ export function parseCsvContent(content: string, batchId: string): ParseResult {
       });
     }
 
-    let tsStr = String(row.timestamp ?? '').trim();
+    const tsStr = String(row.timestamp ?? '').trim();
     if (!tsStr) {
       rowErrors.push({
         row: rawRow,
@@ -189,7 +189,7 @@ export function parseJsonContent(content: string, batchId: string): ParseResult 
   let data: any;
   try {
     data = JSON.parse(content);
-  } catch (e) {
+  } catch (_e) {
     return {
       sensors: [],
       readings: [],

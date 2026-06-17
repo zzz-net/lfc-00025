@@ -1,7 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import multer from 'multer';
 import path from 'path';
-import fs from 'fs';
 import { importContent, importSampleData, verifyContent } from '../services/ImportService.js';
 import { findAllBatches } from '../repositories/BatchRepo.js';
 

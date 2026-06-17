@@ -6,6 +6,10 @@ export function deleteAnomaliesBySensor(sensorId: string): void {
 }
 
 export function deleteAllUnprotectedAnomalies(): void {
+  db.prepare(`
+    DELETE FROM annotations
+    WHERE anomaly_id IN (SELECT id FROM anomalies WHERE has_manual_override = 0)
+  `).run();
   db.prepare('DELETE FROM anomalies WHERE has_manual_override = 0').run();
 }
 
@@ -46,6 +50,7 @@ export function clearAnomalyOverridden(anomalyId: string): void {
 export function findAllAnomalies(
   sensorId?: string,
   statusFilter?: 'ALL' | AnnotationStatus,
+  timeRange?: { start?: string; end?: string },
 ): Anomaly[] {
   let sql = `
     SELECT a.*, s.name as sensor_name,
@@ -60,6 +65,15 @@ export function findAllAnomalies(
   if (sensorId) {
     where.push('a.sensor_id = ?');
     params.push(sensorId);
+  }
+
+  if (timeRange?.start) {
+    where.push('r.timestamp >= ?');
+    params.push(timeRange.start);
+  }
+  if (timeRange?.end) {
+    where.push('r.timestamp <= ?');
+    params.push(timeRange.end);
   }
 
   if (where.length > 0) {

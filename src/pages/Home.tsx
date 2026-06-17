@@ -16,8 +16,6 @@ export default function Home() {
   const sensors = useQCStore((s) => s.sensors);
   const anomalies = useQCStore((s) => s.anomalies);
   const annotationsHistory = useQCStore((s) => s.annotationsHistory);
-  const importResult = useQCStore((s) => s.importResult);
-  const selectedSensorId = useQCStore((s) => s.selectedSensorId);
 
   const [annotateTarget, setAnnotateTarget] = useState<Anomaly | null>(null);
 
