@@ -20,6 +20,7 @@ import annotationRoutes from './routes/annotations.js'
 import reportRoutes from './routes/report.js'
 import stateRoutes from './routes/state.js'
 import auditRoutes from './routes/audit.js'
+import workOrderRoutes from './routes/workorders.js'
 
 // for esm mode
 const __filename = fileURLToPath(import.meta.url)
@@ -55,6 +56,7 @@ app.use('/api/annotations', annotationRoutes)
 app.use('/api/report', reportRoutes)
 app.use('/api/state', stateRoutes)
 app.use('/api/audit', auditRoutes)
+app.use('/api/workorders', workOrderRoutes)
 
 /**
  * health

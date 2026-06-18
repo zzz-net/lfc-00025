@@ -8,7 +8,12 @@ export type AuditAction =
   | 'IMPORT_BATCH'
   | 'ANOMALY_DETECT'
   | 'STATE_SAVE'
-  | 'REPORT_EXPORT';
+  | 'REPORT_EXPORT'
+  | 'WORK_ORDER_CREATE'
+  | 'WORK_ORDER_REASSIGN'
+  | 'WORK_ORDER_CLOSE'
+  | 'WORK_ORDER_REOPEN'
+  | 'WORK_ORDER_UPDATE';
 
 export interface AuditLog {
   id: string;

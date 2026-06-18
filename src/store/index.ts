@@ -3,6 +3,7 @@ import api from '@/lib/api';
 import type {
   Sensor, Reading, Anomaly, Annotation, ThresholdConfig,
   AnnotationStatus, ThresholdPreviewResult, AuditLog,
+  WorkOrder, WorkOrderFilter, WorkOrderPriority, WorkOrderStatus,
 } from '../../shared/types.js';
 
 interface Toast {
@@ -27,6 +28,9 @@ interface QCStore {
   loading: Record<string, boolean>;
   toasts: Toast[];
   importResult: null | any;
+  workOrders: WorkOrder[];
+  workOrderFilter: WorkOrderFilter;
+  workOrderAssignees: string[];
 
   loadAll: () => Promise<void>;
   loadSensors: () => Promise<void>;
@@ -51,6 +55,29 @@ interface QCStore {
   getTimeRangeParams: () => { start?: string; end?: string };
   exportReport: (type: 'csv' | 'pdf') => Promise<void>;
   clearThresholdPreview: () => void;
+  loadWorkOrders: () => Promise<void>;
+  loadWorkOrderAssignees: () => Promise<void>;
+  createWorkOrder: (body: {
+    anomalyId: string;
+    title: string;
+    priority: WorkOrderPriority;
+    assignee: string;
+    creator: string;
+    deadline?: string;
+    remark?: string;
+  }) => Promise<WorkOrder | null>;
+  reassignWorkOrder: (id: string, body: { assignee: string; operator: string; remark?: string }) => Promise<void>;
+  updateWorkOrderStatus: (id: string, body: { status: WorkOrderStatus; operator: string; closeReason?: string }) => Promise<void>;
+  reopenWorkOrder: (id: string, operator: string) => Promise<void>;
+  updateWorkOrder: (id: string, body: {
+    operator: string;
+    priority?: WorkOrderPriority;
+    deadline?: string;
+    remark?: string;
+    title?: string;
+  }) => Promise<void>;
+  setWorkOrderFilter: (f: Partial<WorkOrderFilter>) => void;
+  exportWorkOrdersCsv: () => Promise<void>;
 }
 
 const DEFAULT_THRESHOLDS: ThresholdConfig = {
@@ -74,6 +101,9 @@ export const useQCStore = create<QCStore>((set, get) => ({
   loading: {},
   toasts: [],
   importResult: null,
+  workOrders: [],
+  workOrderFilter: { status: 'ALL', priority: 'ALL' },
+  workOrderAssignees: [],
 
   addToast: (t) => {
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -274,8 +304,12 @@ export const useQCStore = create<QCStore>((set, get) => ({
 
   persistState: async () => {
     try {
-      const { selectedSensorId, statusFilter, timeRange, customStart, customEnd } = get();
-      await api.state.save({ selectedSensorId, statusFilter, timeRange, customStart, customEnd });
+      const { selectedSensorId, statusFilter, timeRange, customStart, customEnd, workOrderFilter, workOrderView } = get() as any;
+      await api.state.save({
+        selectedSensorId, statusFilter, timeRange, customStart, customEnd,
+        workOrderFilter,
+        view: { workOrderView },
+      });
     } catch { /* ignore */ }
   },
 
@@ -284,17 +318,19 @@ export const useQCStore = create<QCStore>((set, get) => ({
     try {
       const [stateRes] = await Promise.allSettled([api.state.get()]);
       if (stateRes.status === 'fulfilled') {
-        const st = stateRes.value.data;
+        const st = stateRes.value.data as any;
         set({
           selectedSensorId: st.selectedSensorId,
           statusFilter: st.statusFilter || 'ALL',
           timeRange: st.timeRange || 'ALL',
           customStart: st.customStart,
           customEnd: st.customEnd,
+          workOrderFilter: st.workOrderFilter || { status: 'ALL', priority: 'ALL' },
         });
       }
       await Promise.all([
-        get().loadSensors(), get().loadThresholds(), get().loadAnnotationHistory(), get().loadThresholdHistory()
+        get().loadSensors(), get().loadThresholds(), get().loadAnnotationHistory(), get().loadThresholdHistory(),
+        get().loadWorkOrders(), get().loadWorkOrderAssignees(),
       ]);
       await get().loadAnomalies();
     } finally {
@@ -318,6 +354,101 @@ export const useQCStore = create<QCStore>((set, get) => ({
         await api.report.downloadPdf(filter);
       }
       get().addToast({ type: 'success', message: `${type.toUpperCase()} 报告导出成功，筛选条件已应用` });
+    } catch (e: any) {
+      get().addToast({ type: 'error', message: '导出失败: ' + e.message });
+    }
+  },
+
+  loadWorkOrders: async () => {
+    get()._setLoading('workOrders', true);
+    try {
+      const filter = get().workOrderFilter;
+      const res = await api.workorders.list(filter);
+      set({ workOrders: res.data });
+    } catch (e: any) {
+      get().addToast({ type: 'error', message: '加载工单失败: ' + e.message });
+    } finally {
+      get()._setLoading('workOrders', false);
+    }
+  },
+
+  loadWorkOrderAssignees: async () => {
+    try {
+      const res = await api.workorders.assignees();
+      set({ workOrderAssignees: res.data });
+    } catch { /* ignore */ }
+  },
+
+  createWorkOrder: async (body) => {
+    try {
+      const res = await api.workorders.create(body);
+      get().addToast({ type: 'success', message: '工单创建成功' });
+      await Promise.all([get().loadWorkOrders(), get().loadWorkOrderAssignees()]);
+      return res.data;
+    } catch (e: any) {
+      const msg = e.message || '创建工单失败';
+      if (msg.includes('已存在未关闭')) {
+        get().addToast({ type: 'warning', message: msg });
+      } else {
+        get().addToast({ type: 'error', message: msg });
+      }
+      return null;
+    }
+  },
+
+  reassignWorkOrder: async (id, body) => {
+    try {
+      await api.workorders.reassign(id, body);
+      get().addToast({ type: 'success', message: '改派成功' });
+      await Promise.all([get().loadWorkOrders(), get().loadWorkOrderAssignees()]);
+    } catch (e: any) {
+      get().addToast({ type: 'error', message: '改派失败: ' + e.message });
+    }
+  },
+
+  updateWorkOrderStatus: async (id, body) => {
+    try {
+      await api.workorders.updateStatus(id, body);
+      const label = body.status === 'CLOSED' ? '关闭' : body.status === 'IN_PROGRESS' ? '开始处理' : '转回待处理';
+      get().addToast({ type: 'success', message: `${label}成功` });
+      await get().loadWorkOrders();
+    } catch (e: any) {
+      get().addToast({ type: 'error', message: '操作失败: ' + e.message });
+    }
+  },
+
+  reopenWorkOrder: async (id, operator) => {
+    try {
+      await api.workorders.reopen(id, { operator });
+      get().addToast({ type: 'success', message: '撤销关闭成功，工单已恢复为处理中' });
+      await get().loadWorkOrders();
+    } catch (e: any) {
+      get().addToast({ type: 'error', message: '撤销关闭失败: ' + e.message });
+    }
+  },
+
+  updateWorkOrder: async (id, body) => {
+    try {
+      await api.workorders.update(id, body);
+      get().addToast({ type: 'success', message: '工单信息已更新' });
+      await get().loadWorkOrders();
+    } catch (e: any) {
+      get().addToast({ type: 'error', message: '更新失败: ' + e.message });
+    }
+  },
+
+  setWorkOrderFilter: (f) => {
+    const cur = get().workOrderFilter;
+    set({ workOrderFilter: { ...cur, ...f } });
+    void get().persistState();
+    void get().loadWorkOrders();
+  },
+
+  exportWorkOrdersCsv: async () => {
+    try {
+      const filter = get().workOrderFilter;
+      await api.workorders.exportCsv(filter);
+      get().addToast({ type: 'success', message: '工单 CSV 导出成功' });
     } catch (e: any) {
       get().addToast({ type: 'error', message: '导出失败: ' + e.message });
     }

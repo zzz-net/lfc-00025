@@ -2,10 +2,10 @@ import { useState, useMemo } from 'react';
 import useQCStore from '@/store';
 import type { Anomaly, Annotation, AnnotationStatus } from '../../shared/types.js';
 import { ANOMALY_TYPE_LABELS, ANOMALY_TYPE_COLORS, STATUS_LABELS, STATUS_COLORS } from '../../shared/types.js';
-import { AlertTriangle, Filter, Undo2, Tag, User, MessageSquare, Clock, Search, ChevronDown, ChevronUp } from 'lucide-react';
+import { AlertTriangle, Filter, Undo2, Tag, User, MessageSquare, Clock, Search, ChevronDown, ChevronUp, ClipboardList } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export default function AnomalyPanel({ onAnnotate }: { onAnnotate: (a: Anomaly) => void }) {
+export default function AnomalyPanel({ onAnnotate, onCreateWorkOrder }: { onAnnotate: (a: Anomaly) => void; onCreateWorkOrder: (a: Anomaly) => void }) {
   const anomalies = useQCStore((s) => s.anomalies);
   const statusFilter = useQCStore((s) => s.statusFilter);
   const setStatusFilter = useQCStore((s) => s.setStatusFilter);
@@ -177,6 +177,7 @@ export default function AnomalyPanel({ onAnnotate }: { onAnnotate: (a: Anomaly) 
                 expanded={expanded === a.id}
                 onToggle={() => setExpanded(expanded === a.id ? null : a.id)}
                 onAnnotate={() => onAnnotate(a)}
+                onCreateWorkOrder={() => onCreateWorkOrder(a)}
               />
             ))
           )
@@ -215,13 +216,14 @@ export default function AnomalyPanel({ onAnnotate }: { onAnnotate: (a: Anomaly) 
 }
 
 function AnomalyCard({
-  anomaly, index, expanded, onToggle, onAnnotate,
+  anomaly, index, expanded, onToggle, onAnnotate, onCreateWorkOrder,
 }: {
   anomaly: Anomaly;
   index: number;
   expanded: boolean;
   onToggle: () => void;
   onAnnotate: () => void;
+  onCreateWorkOrder: () => void;
 }) {
   const status = anomaly.latestAnnotation?.rolledBackAt
     ? 'DETECTED'
@@ -324,15 +326,24 @@ function AnomalyCard({
               <span className="text-accent-cyan font-bold text-sm">{anomaly.reading?.humidity.toFixed(1)}%</span>
             </div>
           </div>
-          <button
-            onClick={onAnnotate}
-            className="w-full btn-primary !py-2 justify-center text-sm"
-          >
-            <Tag className="w-4 h-4" />
-            {anomaly.latestAnnotation && !anomaly.latestAnnotation.rolledBackAt
-              ? '修改标注'
-              : '人工标注'}
-          </button>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={onAnnotate}
+              className="btn-primary !py-2 justify-center text-sm"
+            >
+              <Tag className="w-4 h-4" />
+              {anomaly.latestAnnotation && !anomaly.latestAnnotation.rolledBackAt
+                ? '修改标注'
+                : '人工标注'}
+            </button>
+            <button
+              onClick={onCreateWorkOrder}
+              className="btn-secondary !py-2 justify-center text-sm"
+            >
+              <ClipboardList className="w-4 h-4 text-accent-violet" />
+              拉复测工单
+            </button>
+          </div>
         </div>
       )}
     </div>

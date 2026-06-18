@@ -38,23 +38,34 @@ export function getAppState(): AppState {
   let view = {};
   try { filter = JSON.parse(row.filter_json); } catch { /* ignore */ }
   try { view = JSON.parse(row.view_json); } catch { /* ignore */ }
+  const f: any = filter;
+  const v: any = view;
   return {
-    selectedSensorId: (filter as any).selectedSensorId ?? null,
-    statusFilter: (filter as any).statusFilter ?? 'ALL',
-    timeRange: (filter as any).timeRange ?? 'ALL',
-    customStart: (filter as any).customStart,
-    customEnd: (filter as any).customEnd,
+    selectedSensorId: f.selectedSensorId ?? null,
+    statusFilter: f.statusFilter ?? 'ALL',
+    timeRange: f.timeRange ?? 'ALL',
+    customStart: f.customStart,
+    customEnd: f.customEnd,
+    workOrderFilter: f.workOrderFilter,
+    workOrderView: v.workOrderView,
     view,
   };
 }
 
 export function saveAppState(state: AppState): AppState {
+  const current = getAppState();
   const filter = {
-    selectedSensorId: state.selectedSensorId,
-    statusFilter: state.statusFilter,
-    timeRange: state.timeRange,
-    customStart: state.customStart,
-    customEnd: state.customEnd,
+    selectedSensorId: state.selectedSensorId ?? current.selectedSensorId,
+    statusFilter: state.statusFilter ?? current.statusFilter,
+    timeRange: state.timeRange ?? current.timeRange,
+    customStart: state.customStart ?? current.customStart,
+    customEnd: state.customEnd ?? current.customEnd,
+    workOrderFilter: state.workOrderFilter ?? current.workOrderFilter,
+  };
+  const view = {
+    ...(current.view || {}),
+    ...(state.view || {}),
+    workOrderView: state.workOrderView ?? (current as any).workOrderView,
   };
   db.prepare(`
     UPDATE app_state SET
@@ -62,6 +73,6 @@ export function saveAppState(state: AppState): AppState {
       view_json = ?,
       updated_at = datetime('now')
     WHERE id = 1
-  `).run(JSON.stringify(filter), JSON.stringify(state.view || {}));
+  `).run(JSON.stringify(filter), JSON.stringify(view));
   return getAppState();
 }

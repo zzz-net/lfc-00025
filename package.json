@@ -13,8 +13,8 @@
     "dev": "concurrently \"npm run client:dev\" \"npm run server:dev\"",
     "server:start": "tsx api/server.ts",
     "start": "cross-env NODE_ENV=production npm run server:start",
-    "test": "tsx --test tests/qc-closed-loop.test.ts tests/regression-hard-fixes.test.ts 2>&1",
-    "test:ci": "tsx --test tests/qc-closed-loop.test.ts tests/regression-hard-fixes.test.ts"
+    "test": "tsx --test tests/qc-closed-loop.test.ts tests/regression-hard-fixes.test.ts tests/workorder.test.ts 2>&1",
+    "test:ci": "tsx --test tests/qc-closed-loop.test.ts tests/regression-hard-fixes.test.ts tests/workorder.test.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0",

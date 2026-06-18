@@ -112,6 +112,43 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS work_orders (
+    id TEXT PRIMARY KEY,
+    anomaly_id TEXT NOT NULL REFERENCES anomalies(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    priority TEXT NOT NULL DEFAULT 'NORMAL',
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    assignee TEXT NOT NULL,
+    creator TEXT NOT NULL,
+    deadline TEXT,
+    remark TEXT,
+    closed_at TEXT,
+    closed_by TEXT,
+    close_reason TEXT,
+    can_reopen INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_work_orders_anomaly ON work_orders(anomaly_id);
+CREATE INDEX IF NOT EXISTS idx_work_orders_status ON work_orders(status);
+CREATE INDEX IF NOT EXISTS idx_work_orders_assignee ON work_orders(assignee);
+CREATE INDEX IF NOT EXISTS idx_work_orders_priority ON work_orders(priority);
+CREATE INDEX IF NOT EXISTS idx_work_orders_created ON work_orders(created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_work_orders_active_anomaly ON work_orders(anomaly_id) WHERE status IN ('PENDING', 'IN_PROGRESS');
+
+CREATE TABLE IF NOT EXISTS work_order_history (
+    id TEXT PRIMARY KEY,
+    work_order_id TEXT NOT NULL REFERENCES work_orders(id) ON DELETE CASCADE,
+    action TEXT NOT NULL,
+    operator TEXT NOT NULL,
+    before_json TEXT,
+    after_json TEXT,
+    detail TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_work_order_history_wo ON work_order_history(work_order_id);
+CREATE INDEX IF NOT EXISTS idx_work_order_history_created ON work_order_history(created_at DESC);
 `;
 
 db.exec(DDL);

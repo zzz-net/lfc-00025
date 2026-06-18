@@ -1,7 +1,8 @@
 import type {
   Sensor, Reading, Anomaly, Annotation, ThresholdConfig,
   ImportResponse, ImportBatch, AppState, AnnotationStatus,
-  ThresholdPreviewResult, AuditLog,
+  ThresholdPreviewResult, AuditLog, WorkOrder, WorkOrderHistory,
+  WorkOrderFilter, WorkOrderPriority, WorkOrderStatus,
 } from '../../shared/types.js';
 
 const BASE = '/api';
@@ -142,6 +143,66 @@ export const api = {
     get: () => req<{ success: boolean; data: AppState }>('/state'),
     save: (body: Partial<AppState>) =>
       req<{ success: boolean; data: AppState }>('/state', { method: 'PUT', body: JSON.stringify(body) }),
+  },
+  workorders: {
+    list: (filter?: WorkOrderFilter) => {
+      const qs = new URLSearchParams();
+      if (filter?.assignee) qs.set('assignee', filter.assignee);
+      if (filter?.status && filter.status !== 'ALL') qs.set('status', filter.status);
+      if (filter?.sensorId) qs.set('sensorId', filter.sensorId);
+      if (filter?.priority && filter.priority !== 'ALL') qs.set('priority', filter.priority);
+      const q = qs.toString();
+      return req<{ success: boolean; data: WorkOrder[] }>(`/workorders${q ? '?' + q : ''}`);
+    },
+    get: (id: string) => req<{ success: boolean; data: WorkOrder }>(`/workorders/${id}`),
+    history: (id: string) => req<{ success: boolean; data: WorkOrderHistory[] }>(`/workorders/${id}/history`),
+    assignees: () => req<{ success: boolean; data: string[] }>('/workorders/assignees'),
+    create: (body: {
+      anomalyId: string;
+      title: string;
+      priority: WorkOrderPriority;
+      assignee: string;
+      creator: string;
+      deadline?: string;
+      remark?: string;
+    }) => req<{ success: boolean; data: WorkOrder; conflict?: boolean; conflictWorkOrder?: WorkOrder }>(
+      '/workorders', { method: 'POST', body: JSON.stringify(body) },
+    ),
+    reassign: (id: string, body: { assignee: string; operator: string; remark?: string }) =>
+      req<{ success: boolean; data: WorkOrder }>(`/workorders/${id}/reassign`, {
+        method: 'PUT', body: JSON.stringify(body),
+      }),
+    updateStatus: (id: string, body: { status: WorkOrderStatus; operator: string; closeReason?: string }) =>
+      req<{ success: boolean; data: WorkOrder }>(`/workorders/${id}/status`, {
+        method: 'PUT', body: JSON.stringify(body),
+      }),
+    reopen: (id: string, body: { operator: string }) =>
+      req<{ success: boolean; data: WorkOrder }>(`/workorders/${id}/reopen`, {
+        method: 'POST', body: JSON.stringify(body),
+      }),
+    update: (id: string, body: {
+      operator: string;
+      priority?: WorkOrderPriority;
+      deadline?: string;
+      remark?: string;
+      title?: string;
+    }) => req<{ success: boolean; data: WorkOrder }>(`/workorders/${id}`, {
+      method: 'PUT', body: JSON.stringify(body),
+    }),
+    exportCsv: async (filter?: WorkOrderFilter) => {
+      const res = await fetch(BASE + '/workorders/export/csv', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: filter ? JSON.stringify(filter) : undefined,
+      });
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const fn = res.headers.get('Content-Disposition')?.match(/filename="?([^"]+)"?/)?.[1] || 'work_orders.csv';
+      a.href = url; a.download = fn;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    },
   },
 };
 

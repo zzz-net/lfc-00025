@@ -202,3 +202,89 @@ export interface ThresholdPreviewResult {
     totalReadings: number;
   };
 }
+
+export type WorkOrderPriority = 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT';
+export type WorkOrderStatus = 'PENDING' | 'IN_PROGRESS' | 'CLOSED' | 'CANCELLED';
+export type WorkOrderAction = 'CREATE' | 'REASSIGN' | 'CLOSE' | 'REOPEN' | 'UPDATE' | 'CANCEL';
+
+export interface WorkOrder {
+  id: string;
+  anomalyId: string;
+  anomaly?: Anomaly;
+  title: string;
+  priority: WorkOrderPriority;
+  status: WorkOrderStatus;
+  assignee: string;
+  creator: string;
+  deadline?: string;
+  remark?: string;
+  closedAt?: string;
+  closedBy?: string;
+  closeReason?: string;
+  canReopen: number;
+  createdAt: string;
+  updatedAt: string;
+  latestHistory?: WorkOrderHistory;
+}
+
+export interface WorkOrderHistory {
+  id: string;
+  workOrderId: string;
+  action: WorkOrderAction;
+  operator: string;
+  beforeJson?: any;
+  afterJson?: any;
+  detail?: string;
+  createdAt: string;
+}
+
+export interface WorkOrderFilter {
+  assignee?: string;
+  status?: WorkOrderStatus | 'ALL';
+  sensorId?: string;
+  priority?: WorkOrderPriority | 'ALL';
+}
+
+export const WORK_ORDER_PRIORITY_LABELS: Record<WorkOrderPriority, string> = {
+  LOW: '低',
+  NORMAL: '普通',
+  HIGH: '高',
+  URGENT: '紧急',
+};
+
+export const WORK_ORDER_PRIORITY_COLORS: Record<WorkOrderPriority, string> = {
+  LOW: '#6B7280',
+  NORMAL: '#3B82F6',
+  HIGH: '#F59E0B',
+  URGENT: '#EF4444',
+};
+
+export const WORK_ORDER_STATUS_LABELS: Record<WorkOrderStatus, string> = {
+  PENDING: '待处理',
+  IN_PROGRESS: '处理中',
+  CLOSED: '已关闭',
+  CANCELLED: '已取消',
+};
+
+export const WORK_ORDER_STATUS_COLORS: Record<WorkOrderStatus, string> = {
+  PENDING: '#F59E0B',
+  IN_PROGRESS: '#3B82F6',
+  CLOSED: '#10B981',
+  CANCELLED: '#6B7280',
+};
+
+export const WORK_ORDER_ACTION_LABELS: Record<WorkOrderAction, string> = {
+  CREATE: '创建工单',
+  REASSIGN: '改派处理人',
+  CLOSE: '关闭工单',
+  REOPEN: '撤销关闭',
+  UPDATE: '更新信息',
+  CANCEL: '取消工单',
+};
+
+declare module './types' {
+  interface AppState {
+    workOrderFilter?: WorkOrderFilter;
+    workOrderView?: object;
+  }
+}

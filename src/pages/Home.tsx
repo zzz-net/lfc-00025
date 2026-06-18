@@ -5,9 +5,11 @@ import SensorList from '@/components/SensorList';
 import SensorChart from '@/components/SensorChart';
 import AnomalyPanel from '@/components/AnomalyPanel';
 import AnnotationDialog from '@/components/AnnotationDialog';
+import WorkOrderPanel from '@/components/WorkOrderPanel';
+import WorkOrderDialog from '@/components/WorkOrderDialog';
 import Toasts from '@/components/Toasts';
 import type { Anomaly } from '../../shared/types.js';
-import { Loader2, Database, Activity, AlertTriangle, FileCheck } from 'lucide-react';
+import { Loader2, Database, Activity, AlertTriangle, FileCheck, ClipboardList, AlertOctagon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export default function Home() {
@@ -15,9 +17,12 @@ export default function Home() {
   const loadingAll = useQCStore((s) => s.loading.all);
   const sensors = useQCStore((s) => s.sensors);
   const anomalies = useQCStore((s) => s.anomalies);
+  const workOrders = useQCStore((s) => s.workOrders);
   const annotationsHistory = useQCStore((s) => s.annotationsHistory);
 
   const [annotateTarget, setAnnotateTarget] = useState<Anomaly | null>(null);
+  const [workOrderTarget, setWorkOrderTarget] = useState<Anomaly | null>(null);
+  const [rightPanel, setRightPanel] = useState<'anomaly' | 'workorder'>('anomaly');
 
   useEffect(() => {
     void loadAll();
@@ -26,6 +31,7 @@ export default function Home() {
   const protectedCount = anomalies.filter((a) => a.hasManualOverride).length;
   const rolledBackCount = annotationsHistory.filter((h) => h.rolledBackAt).length;
   const doneCount = annotationsHistory.filter((h) => !h.rolledBackAt).length;
+  const pendingWorkOrders = workOrders.filter((w) => w.status === 'PENDING' || w.status === 'IN_PROGRESS').length;
 
   return (
     <div className="h-screen w-screen flex flex-col bg-slateqc-50 overflow-hidden font-sans text-slateqc-800 antialiased">
@@ -54,7 +60,7 @@ export default function Home() {
               <div className="flex-1 overflow-y-auto scrollbar-thin p-6 space-y-6">
                 <SensorChart />
 
-                <div className="grid grid-cols-4 gap-4">
+                <div className="grid grid-cols-5 gap-4">
                   <div className="card flex items-center gap-3 p-4">
                     <div className="w-10 h-10 rounded-xl bg-accent-blue/10 flex items-center justify-center">
                       <Database className="w-5 h-5 text-accent-blue" />
@@ -71,6 +77,16 @@ export default function Home() {
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-wider text-slateqc-400">异常总数</p>
                       <p className="text-xl font-bold text-slateqc-900 leading-tight">{anomalies.length}</p>
+                    </div>
+                  </div>
+                  <div className="card flex items-center gap-3 p-4">
+                    <div className="w-10 h-10 rounded-xl bg-violet-100 flex items-center justify-center">
+                      <ClipboardList className="w-5 h-5 text-accent-violet" />
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-slateqc-400">待处理工单</p>
+                      <p className="text-xl font-bold text-slateqc-900 leading-tight">{pendingWorkOrders}</p>
+                      <p className="text-[10px] text-slateqc-400 leading-tight">共 {workOrders.length} 条</p>
                     </div>
                   </div>
                   <div className="card flex items-center gap-3 p-4">
@@ -106,13 +122,53 @@ export default function Home() {
             </main>
 
             <aside className="w-[380px] shrink-0 border-l border-slateqc-200 bg-white/80 backdrop-blur flex flex-col">
-              <AnomalyPanel onAnnotate={setAnnotateTarget} />
+              <div className="flex border-b border-slateqc-100 px-2 pt-2">
+                <button
+                  onClick={() => setRightPanel('anomaly')}
+                  className={cn(
+                    'flex-1 px-3 py-2.5 text-xs font-semibold transition-all relative flex items-center justify-center gap-1.5',
+                    rightPanel === 'anomaly' ? 'text-accent-red' : 'text-slateqc-400 hover:text-slateqc-600',
+                  )}
+                >
+                  <AlertOctagon className="w-3.5 h-3.5" />
+                  异常管理
+                  {rightPanel === 'anomaly' && (
+                    <span className="absolute bottom-0 left-4 right-4 h-0.5 bg-accent-red rounded-t" />
+                  )}
+                </button>
+                <button
+                  onClick={() => setRightPanel('workorder')}
+                  className={cn(
+                    'flex-1 px-3 py-2.5 text-xs font-semibold transition-all relative flex items-center justify-center gap-1.5',
+                    rightPanel === 'workorder' ? 'text-accent-violet' : 'text-slateqc-400 hover:text-slateqc-600',
+                  )}
+                >
+                  <ClipboardList className="w-3.5 h-3.5" />
+                  复测工单
+                  {pendingWorkOrders > 0 && (
+                    <span className="ml-0.5 px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-bold">
+                      {pendingWorkOrders}
+                    </span>
+                  )}
+                  {rightPanel === 'workorder' && (
+                    <span className="absolute bottom-0 left-4 right-4 h-0.5 bg-accent-violet rounded-t" />
+                  )}
+                </button>
+              </div>
+              <div className="flex-1 min-h-0 overflow-hidden">
+                {rightPanel === 'anomaly' ? (
+                  <AnomalyPanel onAnnotate={setAnnotateTarget} onCreateWorkOrder={setWorkOrderTarget} />
+                ) : (
+                  <WorkOrderPanel />
+                )}
+              </div>
             </aside>
           </>
         )}
       </div>
 
       <AnnotationDialog anomaly={annotateTarget} onClose={() => setAnnotateTarget(null)} />
+      <WorkOrderDialog anomaly={workOrderTarget} onClose={() => setWorkOrderTarget(null)} />
       <Toasts />
     </div>
   );
