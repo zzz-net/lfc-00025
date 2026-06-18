@@ -40,10 +40,12 @@ async function loadModules() {
     findAllAnomalies: AnomalyRepo.findAllAnomalies,
     findAnomalyById: AnomalyRepo.findAnomalyById,
     insertAnnotation: AnnotationRepo.insertAnnotation,
+    rollbackLatestAnnotation: AnnotationRepo.rollbackLatestAnnotation,
     findAnnotationHistory: AnnotationRepo.findAnnotationHistory,
     getAppState: ConfigRepo.getAppState,
     saveAppState: ConfigRepo.saveAppState,
     getThresholdConfig: ConfigRepo.getThresholdConfig,
+    updateThresholdConfig: ConfigRepo.updateThresholdConfig,
     generateId: fileHash.generateId,
     db: DataDb.db,
   };
@@ -51,30 +53,95 @@ async function loadModules() {
 
 type Mods = Awaited<ReturnType<typeof loadModules>>;
 
+function splitCsvLine(line: string): string[] {
+  const cells: string[] = [];
+  let cur = '';
+  let inQuote = false;
+  for (let j = 0; j < line.length; j++) {
+    const ch = line[j];
+    if (ch === '"') inQuote = !inQuote;
+    else if (ch === ',' && !inQuote) { cells.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  cells.push(cur);
+  return cells.map((c) => c.replace(/^"|"$/g, '').trim());
+}
+
 function parseCsvRows(csv: string): Record<string, string>[] {
   const firstSep = csv.indexOf('=====');
   const anomalySection = firstSep >= 0 ? csv.substring(0, firstSep) : csv;
   const lines = anomalySection.split(/\r?\n/).filter((l) => l.trim().length > 0);
   if (lines.length === 0) return [];
-  const headers = lines[0].split(',').map((h) => h.replace(/^"|"$/g, '').trim());
+  const headers = splitCsvLine(lines[0]);
   const rows: Record<string, string>[] = [];
   for (let i = 1; i < lines.length; i++) {
-    const line = lines[i];
-    const cells: string[] = [];
-    let cur = '';
-    let inQuote = false;
-    for (let j = 0; j < line.length; j++) {
-      const ch = line[j];
-      if (ch === '"') inQuote = !inQuote;
-      else if (ch === ',' && !inQuote) { cells.push(cur); cur = ''; }
-      else cur += ch;
-    }
-    cells.push(cur);
+    const cells = splitCsvLine(lines[i]);
+    if (cells.every((c) => c.length === 0)) continue;
     const obj: Record<string, string> = {};
     for (let k = 0; k < headers.length; k++) obj[headers[k]] = (cells[k] || '').trim();
     rows.push(obj);
   }
   return rows;
+}
+
+interface CsvThresholdRow {
+  key: string;
+  value: number;
+  label: string;
+}
+
+function parseCsvThresholdSection(csv: string): {
+  meta: { exportedAt?: string; filter?: string };
+  rows: CsvThresholdRow[];
+  present: boolean;
+} {
+  const marker = '===== 报告生成时生效的阈值配置 =====';
+  const start = csv.indexOf(marker);
+  const result: { meta: { exportedAt?: string; filter?: string }; rows: CsvThresholdRow[]; present: boolean } = {
+    meta: {},
+    rows: [],
+    present: start >= 0,
+  };
+  if (start < 0) return result;
+  const afterMarker = csv.substring(start + marker.length);
+  const nextSection = afterMarker.indexOf('=====');
+  const section = nextSection >= 0 ? afterMarker.substring(0, nextSection) : afterMarker;
+  const lines = section.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  let headerIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith('#')) {
+      const m1 = line.match(/^#\s*导出时间[:：]\s*(.+)$/);
+      if (m1) result.meta.exportedAt = m1[1].trim();
+      const m2 = line.match(/^#\s*筛选条件[:：]\s*(.+)$/);
+      if (m2) result.meta.filter = m2[1].trim();
+      continue;
+    }
+    if (line.includes('配置项') && (line.includes('数值') || line.includes('说明'))) {
+      headerIdx = i;
+      break;
+    }
+  }
+  if (headerIdx < 0) return result;
+  const headers = splitCsvLine(lines[headerIdx]);
+  const keyIdx = headers.indexOf('配置项');
+  const valIdx = headers.indexOf('数值');
+  const labelIdx = headers.indexOf('说明');
+  if (keyIdx < 0 || valIdx < 0) return result;
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const cells = splitCsvLine(lines[i]);
+    if (cells.every((c) => c.length === 0)) continue;
+    const key = cells[keyIdx] || '';
+    const valRaw = cells[valIdx] || '';
+    const val = Number(valRaw);
+    if (!key || Number.isNaN(val)) continue;
+    result.rows.push({
+      key,
+      value: val,
+      label: labelIdx >= 0 ? (cells[labelIdx] || '') : '',
+    });
+  }
+  return result;
 }
 
 describe('硬伤回归：生产启动链路 + 筛选导出一致性', () => {
@@ -508,6 +575,302 @@ describe('硬伤回归：生产启动链路 + 筛选导出一致性', () => {
           `${repo.id} pendingCount HTTP(${http.pendingCount}) === Repo(${repo.pendingCount})`);
         assert.equal(http.name, repo.name, `${repo.id} name 一致`);
       }
+    });
+  });
+
+  // ========== 硬伤5：阈值摘要一致性 + 人类可读说明 ==========
+  describe('5. CSV 阈值摘要：人类可读说明 + 数值与 ConfigRepo 一致 + 不污染异常明细解析', () => {
+    before(() => {
+      const existing = m.findAllSensors();
+      if (existing.length === 0) {
+        const res = m.importSampleData();
+        assert.ok(res.success, '首次导入样例必须成功');
+      }
+    });
+
+    it('CSV 必须包含阈值摘要区块（标记行 + 7 个配置项 + 说明列）', () => {
+      const csv = m.generateCsvReport();
+      const parsed = parseCsvThresholdSection(csv);
+      assert.ok(parsed.present, 'CSV 必须包含"===== 报告生成时生效的阈值配置 ====="区块');
+      assert.ok(parsed.meta.exportedAt, '阈值区块必须包含导出时间元数据');
+      assert.ok(parsed.meta.filter, '阈值区块必须包含筛选条件元数据');
+      assert.equal(parsed.rows.length, 7, `阈值摘要应正好 7 个配置项，实际 ${parsed.rows.length}`);
+      for (const r of parsed.rows) {
+        assert.ok(r.key && r.key.trim().length > 0, `每个配置项必须有中文名：${JSON.stringify(r)}`);
+        assert.ok(typeof r.value === 'number' && !Number.isNaN(r.value),
+          `${r.key} 数值必须是数字，实际 ${r.value}`);
+        assert.ok(r.label && r.label.length > 0,
+          `${r.key} 必须包含人类可读"说明"列，实际："${r.label}"`);
+      }
+    });
+
+    it('CSV 阈值摘要数值必须 === getThresholdConfig() 返回值（逐字段比对）', () => {
+      const cfg = m.getThresholdConfig();
+      const csv = m.generateCsvReport();
+      const parsed = parseCsvThresholdSection(csv);
+      const byKey: Record<string, number> = {};
+      for (const r of parsed.rows) byKey[r.key] = r.value;
+      assert.equal(byKey['温度下限 (℃)'], cfg.tempMin, '温度下限匹配');
+      assert.equal(byKey['温度上限 (℃)'], cfg.tempMax, '温度上限匹配');
+      assert.equal(byKey['湿度下限 (%)'], cfg.humidMin, '湿度下限匹配');
+      assert.equal(byKey['湿度上限 (%)'], cfg.humidMax, '湿度上限匹配');
+      assert.equal(byKey['温度漂移阈值 (℃)'], cfg.tempDriftThreshold, '温度漂移阈值匹配');
+      assert.equal(byKey['湿度漂移阈值 (%)'], cfg.humidDriftThreshold, '湿度漂移阈值匹配');
+      assert.equal(byKey['断点时间阈值 (秒)'], cfg.gapThresholdSeconds, '断点时间阈值匹配');
+    });
+
+    it('阈值区块不得出现在异常明细解析结果中（前后隔离干净）', () => {
+      const csv = m.generateCsvReport();
+      const anomalyRows = parseCsvRows(csv);
+      assert.ok(anomalyRows.length > 0, '异常明细解析必须有数据（否则就是被阈值区块污染了）');
+      for (const r of anomalyRows) {
+        const keys = Object.keys(r);
+        assert.ok(!keys.includes('配置项'),
+          `异常明细不应出现阈值区块的"配置项"列，实际列：${keys.join(', ')}`);
+        assert.ok(!keys.includes('数值'),
+          `异常明细不应出现阈值区块的"数值"列，实际列：${keys.join(', ')}`);
+        assert.ok(keys.includes('异常ID') && keys.includes('传感器ID') && keys.includes('当前状态'),
+          `异常明细必须含标准列（异常ID/传感器ID/当前状态），实际：${keys.join(', ')}`);
+        if (r['传感器ID']) {
+          assert.ok(!r['传感器ID'].includes('====='),
+            `异常行内容不应含分隔符"====="：${JSON.stringify(r)}`);
+        }
+      }
+    });
+
+    it('单传感器 + 状态筛选后，CSV 阈值区块元数据必须记录实际筛选条件', () => {
+      const sensors = m.findAllSensors();
+      const target = sensors[0];
+      const filter = { sensorId: target.id, statusFilter: 'ACCEPTED' as const };
+      const csv = m.generateCsvReport(filter);
+      const parsed = parseCsvThresholdSection(csv);
+      assert.ok(parsed.meta.filter?.includes(target.id),
+        `筛选条件元数据应包含传感器 ${target.id}，实际：${parsed.meta.filter}`);
+      assert.ok(parsed.meta.filter?.includes('ACCEPTED'),
+        `筛选条件元数据应包含状态 ACCEPTED，实际：${parsed.meta.filter}`);
+    });
+  });
+
+  // ========== 硬伤6：阈值跨重启持久化 + 回读后导出不漂移 ==========
+  describe('6. 阈值跨重启持久化：updateThresholdConfig → DB 持久化 → 重启后 getThresholdConfig → 再导出数值完全一致', () => {
+    const originalCfg: any = {};
+
+    before(() => {
+      const existing = m.findAllSensors();
+      if (existing.length === 0) {
+        const res = m.importSampleData();
+        assert.ok(res.success, '首次导入样例必须成功');
+      }
+      const orig = m.getThresholdConfig();
+      Object.assign(originalCfg, orig);
+    });
+
+    after(() => {
+      if (Object.keys(originalCfg).length > 0) {
+        try { m.updateThresholdConfig(originalCfg); } catch { /* ignore */ }
+      }
+    });
+
+    it('updateThresholdConfig 写入后 getThresholdConfig 必须立即返回新值（内存+DB 一致）', () => {
+      const custom = {
+        tempMin: 2.5,
+        tempMax: 8.0,
+        humidMin: 40,
+        humidMax: 65,
+        tempDriftThreshold: 1.5,
+        humidDriftThreshold: 5,
+        gapThresholdSeconds: 900,
+      };
+      const updated = m.updateThresholdConfig(custom);
+      assert.equal(updated.tempMin, custom.tempMin, 'update 返回值 tempMin');
+      assert.equal(updated.tempMax, custom.tempMax, 'update 返回值 tempMax');
+      assert.equal(updated.humidMin, custom.humidMin, 'update 返回值 humidMin');
+      assert.equal(updated.humidMax, custom.humidMax, 'update 返回值 humidMax');
+      assert.equal(updated.tempDriftThreshold, custom.tempDriftThreshold, 'update 返回值 tempDrift');
+      assert.equal(updated.humidDriftThreshold, custom.humidDriftThreshold, 'update 返回值 humidDrift');
+      assert.equal(updated.gapThresholdSeconds, custom.gapThresholdSeconds, 'update 返回值 gapSeconds');
+
+      const reRead = m.getThresholdConfig();
+      assert.deepEqual(reRead, updated, 'update 后立即 getThresholdConfig 必须完全相同');
+    });
+
+    it('跨重启：直接查 SQLite 原始行 threshold_config，数值必须与 update 一致（证明已落盘）', () => {
+      const cfg = m.getThresholdConfig();
+      const row: any = (m.db as any)
+        .prepare('SELECT * FROM threshold_config WHERE id = 1')
+        .get();
+      assert.ok(row, 'threshold_config 表 id=1 行必须存在');
+      assert.equal(row.temp_min, cfg.tempMin, 'DB temp_min === config.tempMin');
+      assert.equal(row.temp_max, cfg.tempMax, 'DB temp_max === config.tempMax');
+      assert.equal(row.humid_min, cfg.humidMin, 'DB humid_min === config.humidMin');
+      assert.equal(row.humid_max, cfg.humidMax, 'DB humid_max === config.humidMax');
+      assert.equal(row.temp_drift, cfg.tempDriftThreshold, 'DB temp_drift === config.tempDriftThreshold');
+      assert.equal(row.humid_drift, cfg.humidDriftThreshold, 'DB humid_drift === config.humidDriftThreshold');
+      assert.equal(row.gap_seconds, cfg.gapThresholdSeconds, 'DB gap_seconds === config.gapThresholdSeconds');
+    });
+
+    it('跨重启后导出的 CSV：阈值摘要数值必须与保存时完全一致（不漂回默认值）', () => {
+      const custom = {
+        tempMin: 3.3,
+        tempMax: 7.7,
+        humidMin: 44,
+        humidMax: 55,
+        tempDriftThreshold: 0.8,
+        humidDriftThreshold: 7,
+        gapThresholdSeconds: 1200,
+      };
+      m.updateThresholdConfig(custom);
+
+      const csvBefore = m.generateCsvReport();
+      const thBefore = parseCsvThresholdSection(csvBefore);
+      assert.equal(thBefore.rows.length, 7, '重启前阈值摘要 7 项');
+
+      // 模拟"重启"：强制通过原始 SQL 再读一次（绕过任何内存缓存，模拟新进程启动）
+      const freshRow: any = (m.db as any)
+        .prepare('SELECT * FROM threshold_config WHERE id = 1')
+        .get();
+      const restartedConfig = {
+        tempMin: freshRow.temp_min,
+        tempMax: freshRow.temp_max,
+        humidMin: freshRow.humid_min,
+        humidMax: freshRow.humid_max,
+        tempDriftThreshold: freshRow.temp_drift,
+        humidDriftThreshold: freshRow.humid_drift,
+        gapThresholdSeconds: freshRow.gap_seconds,
+      };
+      assert.deepEqual(restartedConfig, custom, '从 SQLite 原始行恢复的配置必须 === update 时写入的值');
+
+      // 用"重启后"的值再次生成报告（模拟新进程 getThresholdConfig 后导出）
+      // 这里我们直接验证：updateThresholdConfig 返回值 + DB 原始值 + CSV 解析值 三者完全一致
+      const csvAfter = m.generateCsvReport();
+      const thAfter = parseCsvThresholdSection(csvAfter);
+      const byKeyBefore: Record<string, number> = {};
+      const byKeyAfter: Record<string, number> = {};
+      for (const r of thBefore.rows) byKeyBefore[r.key] = r.value;
+      for (const r of thAfter.rows) byKeyAfter[r.key] = r.value;
+      for (const k of Object.keys(byKeyBefore)) {
+        assert.equal(byKeyAfter[k], byKeyBefore[k],
+          `跨重启后阈值 ${k} 必须保持不变：重启前=${byKeyBefore[k]}，重启后=${byKeyAfter[k]}`);
+      }
+    });
+  });
+
+  // ========== 硬伤7：老链路回归（导入/标注撤销/首页统计/报告路由） ==========
+  describe('7. 老链路回归：导入去重、标注撤销、首页统计、报告 HTTP 路由不能被带坏', () => {
+    const ImportSvcPromise = import('../api/services/ImportService.js');
+
+    before(async () => {
+      const existing = m.findAllSensors();
+      if (existing.length === 0) {
+        const res = m.importSampleData();
+        assert.ok(res.success, '首次导入样例必须成功');
+      }
+    });
+
+    it('重复导入样例数据必须被拒绝（file_hash 去重）', async () => {
+      const ImportSvc = await ImportSvcPromise;
+      const res = ImportSvc.importSampleData();
+      assert.equal(res.success, false, '重复导入必须失败');
+      assert.ok(res.duplicateBatch === true, '必须标记 duplicateBatch=true');
+      const total = (m.db as any).prepare('SELECT COUNT(*) as c FROM readings').get().c;
+      assert.ok(total >= 9000 && total <= 12000,
+        `重复导入后读数总数不得增长或缩减异常，实际 ${total}`);
+    });
+
+    it('标注后 hasManualOverride=1，回滚最后一条标注后保护标志应解除（只剩 0 条有效标注）', () => {
+      const candidates = m.findAllAnomalies(undefined, 'DETECTED');
+      assert.ok(candidates.length >= 1, '至少 1 条待处理异常');
+      const target = candidates[0];
+
+      // 标注
+      m.insertAnnotation({
+        id: m.generateId('ann_regression_'),
+        anomalyId: target.id,
+        status: 'FALSE_POSITIVE',
+        handler: '回归测试员',
+        reason: '老链路回归：标注',
+      });
+      const afterAnnotate = m.findAnomalyById(target.id)!;
+      assert.equal(afterAnnotate.hasManualOverride, 1, '标注后 hasManualOverride=1');
+
+      // 回滚
+      m.rollbackLatestAnnotation('老链路回归：回滚');
+      const afterRollback = m.findAnomalyById(target.id)!;
+      assert.equal(afterRollback.hasManualOverride, 0,
+        '回滚最后一条标注后，hasManualOverride 必须恢复为 0');
+      const rolledStatus = afterRollback.latestAnnotation?.rolledBackAt
+        ? 'DETECTED'
+        : (afterRollback.latestAnnotation?.status || 'DETECTED');
+      assert.equal(rolledStatus, 'DETECTED', '回滚后异常状态必须恢复 DETECTED');
+    });
+
+    it('首页统计：传感器 anomalyCount ≤ anomalies 表总行数（不得被放大）', () => {
+      const totalAnomalies = (m.db as any).prepare('SELECT COUNT(*) as c FROM anomalies').get().c;
+      const sensors = m.findAllSensors();
+      for (const s of sensors) {
+        assert.ok(s.anomalyCount! <= totalAnomalies,
+          `${s.id} anomalyCount(${s.anomalyCount}) ≤ 总异常数(${totalAnomalies})`);
+        assert.ok(s.readingCount! < 1_000_000,
+          `${s.id} readingCount 不能百万级（${s.readingCount}）`);
+        assert.ok(s.anomalyCount! < 1_000_000,
+          `${s.id} anomalyCount 不能百万级（${s.anomalyCount}）`);
+      }
+    });
+
+    it('POST /api/report/csv HTTP 路由：mock req/res 必须返回带 BOM 的 CSV，Content-Type 正确', async (t) => {
+      m.saveAppState({
+        selectedSensorId: null,
+        statusFilter: 'ALL',
+        timeRange: 'ALL',
+        customStart: undefined,
+        customEnd: undefined,
+        view: {},
+      });
+      const reportRouterMod = await import('../api/routes/report.js');
+      const router = reportRouterMod.default as any;
+      const postCsvLayer = router.stack.find(
+        (l: any) => l.route && l.route.path === '/csv' && l.route.methods && l.route.methods.post,
+      );
+      assert.ok(postCsvLayer, 'report router 必须有 POST /csv 路由');
+      const handlers = postCsvLayer.route.stack as any[];
+      const businessHandler: any = handlers[handlers.length - 1]?.handle;
+      assert.ok(typeof businessHandler === 'function', 'POST /csv 最后一层必须是业务 handler');
+
+      let _statusCode = 0;
+      let sentBody: any = undefined;
+      const headers: Record<string, string> = {};
+      const mockReq = {
+        body: {
+          sensorId: undefined,
+          statusFilter: 'ALL',
+          timeRange: 'ALL',
+        },
+      } as any;
+      const mockRes = {
+        status(code: number) { _statusCode = code; return this; },
+        setHeader(k: string, v: string) { headers[k] = v; return this; },
+        send(body: any) { sentBody = body; return this; },
+      } as any;
+      const mockNext = (e?: Error) => {
+        if (e) t.diagnostic(`next(${e.message})`);
+      };
+      await businessHandler(mockReq, mockRes, mockNext);
+
+      assert.ok(sentBody != null, 'handler 必须调用 res.send 返回 CSV 内容');
+      assert.ok(
+        typeof sentBody === 'string' && sentBody.startsWith('\uFEFF'),
+        '返回的 CSV 必须以 UTF-8 BOM（\\uFEFF）开头，保证 Excel 中文不乱码',
+      );
+      assert.ok(
+        headers['Content-Type']?.includes('text/csv'),
+        `Content-Type 必须是 text/csv，实际：${headers['Content-Type']}`,
+      );
+      const withoutBom = sentBody.substring(1);
+      const rows = parseCsvRows(withoutBom);
+      assert.ok(rows.length > 0, 'HTTP 路由返回的 CSV 必须能解析出异常明细行');
+      const th = parseCsvThresholdSection(withoutBom);
+      assert.ok(th.present, 'HTTP 路由返回的 CSV 必须包含阈值摘要区块');
+      assert.equal(th.rows.length, 7, 'HTTP 路由 CSV 阈值摘要必须 7 项');
     });
   });
 });

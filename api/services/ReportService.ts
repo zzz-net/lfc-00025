@@ -37,18 +37,20 @@ export function generateCsvReport(filter: ReportFilter = {}): string {
     回滚原因: a.latestAnnotation?.rollbackReason || '',
   }));
 
-  let csv = `===== 报告生成时生效的阈值配置 =====\n`;
+  let csv = Papa.unparse(rows);
+
+  csv += '\n\n===== 报告生成时生效的阈值配置 =====\n';
+  csv += `# 导出时间: ${new Date().toISOString()}\n`;
+  csv += `# 筛选条件: 传感器=${filter.sensorId || '全部'}, 状态=${filter.statusFilter || 'ALL'}, 时间范围=${JSON.stringify(filter.timeRange || {})}\n`;
   csv += Papa.unparse([
-    { 配置项: '温度下限 (℃)', 数值: threshold.tempMin },
-    { 配置项: '温度上限 (℃)', 数值: threshold.tempMax },
-    { 配置项: '湿度下限 (%)', 数值: threshold.humidMin },
-    { 配置项: '湿度上限 (%)', 数值: threshold.humidMax },
-    { 配置项: '温度漂移阈值 (℃)', 数值: threshold.tempDriftThreshold },
-    { 配置项: '湿度漂移阈值 (%)', 数值: threshold.humidDriftThreshold },
-    { 配置项: '断点时间阈值 (秒)', 数值: threshold.gapThresholdSeconds },
+    { 配置项: '温度下限 (℃)', 数值: threshold.tempMin, 说明: '读数温度低于此值判定为越下限异常' },
+    { 配置项: '温度上限 (℃)', 数值: threshold.tempMax, 说明: '读数温度高于此值判定为越上限异常' },
+    { 配置项: '湿度下限 (%)', 数值: threshold.humidMin, 说明: '读数湿度低于此值判定为越下限异常' },
+    { 配置项: '湿度上限 (%)', 数值: threshold.humidMax, 说明: '读数湿度高于此值判定为越上限异常' },
+    { 配置项: '温度漂移阈值 (℃)', 数值: threshold.tempDriftThreshold, 说明: '相邻读数温度差超过判定为漂移异常' },
+    { 配置项: '湿度漂移阈值 (%)', 数值: threshold.humidDriftThreshold, 说明: '相邻读数湿度差超过判定为漂移异常' },
+    { 配置项: '断点时间阈值 (秒)', 数值: threshold.gapThresholdSeconds, 说明: '相邻读数时间间隔超过判定为数据断点' },
   ]);
-  csv += '\n\n===== 异常明细 =====\n';
-  csv += Papa.unparse(rows);
 
   const history = findAnnotationHistoryByFilter(500, filter);
   csv += '\n\n===== 标注历史 =====\n';
