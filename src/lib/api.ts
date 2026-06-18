@@ -3,6 +3,8 @@ import type {
   ImportResponse, ImportBatch, AppState, AnnotationStatus,
   ThresholdPreviewResult, AuditLog, WorkOrder, WorkOrderHistory,
   WorkOrderFilter, WorkOrderPriority, WorkOrderStatus,
+  SandboxRule, SandboxPlayback, SandboxComparisonResult,
+  SandboxAnomaly, SandboxState, PublishConflictInfo,
 } from '../../shared/types.js';
 
 const BASE = '/api';
@@ -202,6 +204,95 @@ export const api = {
       a.href = url; a.download = fn;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
+    },
+  },
+  sandbox: {
+    rules: {
+      list: () => req<{ success: boolean; data: SandboxRule[] }>('/sandbox/rules'),
+      get: (id: string) => req<{ success: boolean; data: SandboxRule }>(`/sandbox/rules/${id}`),
+      create: (body: {
+        name?: string; description?: string; threshold?: ThresholdConfig;
+        copyFromLive?: boolean; operator?: string;
+      }) => req<{ success: boolean; data: SandboxRule }>('/sandbox/rules', {
+        method: 'POST', body: JSON.stringify(body),
+      }),
+      update: (id: string, body: {
+        name?: string; description?: string; threshold?: ThresholdConfig; operator?: string;
+      }) => req<{ success: boolean; data: SandboxRule }>(`/sandbox/rules/${id}`, {
+        method: 'PUT', body: JSON.stringify(body),
+      }),
+      delete: (id: string, operator?: string) => {
+        const q = operator ? `?operator=${encodeURIComponent(operator)}` : '';
+        return req<{ success: boolean }>(`/sandbox/rules/${id}${q}`, { method: 'DELETE' });
+      },
+      copy: (id: string, body: { newName?: string; operator?: string }) =>
+        req<{ success: boolean; data: SandboxRule }>(`/sandbox/rules/${id}/copy`, {
+          method: 'POST', body: JSON.stringify(body),
+        }),
+      playbacks: (id: string) =>
+        req<{ success: boolean; data: SandboxPlayback[] }>(`/sandbox/rules/${id}/playbacks`),
+      playbackSensors: (id: string, body: {
+        name?: string; sensorIds?: string[];
+        timeStart?: string; timeEnd?: string; operator?: string;
+      }) => req<{ success: boolean; data: SandboxPlayback }>(`/sandbox/rules/${id}/playback/sensors`, {
+        method: 'POST', body: JSON.stringify(body),
+      }),
+      playbackCsv: (id: string, file: File, name?: string, operator?: string) => {
+        const fd = new FormData();
+        fd.append('file', file);
+        if (name) fd.append('name', name);
+        if (operator) fd.append('operator', operator);
+        return fetch(BASE + `/sandbox/rules/${id}/playback/csv`, {
+          method: 'POST', body: fd,
+        }).then(async (r) => ({ status: r.status, data: await r.json() as { success: boolean; data: SandboxPlayback; error?: string } }));
+      },
+      conflict: (id: string) =>
+        req<{ success: boolean; data: PublishConflictInfo }>(`/sandbox/rules/${id}/conflict`),
+      publish: (id: string, body: { force?: boolean; operator?: string }) =>
+        req<{ success: boolean; message: string; conflict?: PublishConflictInfo }>(
+          `/sandbox/rules/${id}/publish`, { method: 'POST', body: JSON.stringify(body) },
+        ),
+    },
+    playbacks: {
+      get: (id: string) => req<{ success: boolean; data: SandboxPlayback }>(`/sandbox/playbacks/${id}`),
+      comparison: (id: string) =>
+        req<{ success: boolean; data: SandboxComparisonResult }>(`/sandbox/playbacks/${id}/comparison`),
+      anomalies: (id: string, options?: {
+        sensorId?: string; type?: string; onlyNew?: boolean; onlyMissing?: boolean; limit?: number;
+      }) => {
+        const qs = new URLSearchParams();
+        if (options?.sensorId) qs.set('sensorId', options.sensorId);
+        if (options?.type) qs.set('type', options.type);
+        if (options?.onlyNew) qs.set('onlyNew', 'true');
+        if (options?.onlyMissing) qs.set('onlyMissing', 'true');
+        if (options?.limit) qs.set('limit', String(options.limit));
+        const q = qs.toString();
+        return req<{ success: boolean; data: SandboxAnomaly[] }>(
+          `/sandbox/playbacks/${id}/anomalies${q ? '?' + q : ''}`,
+        );
+      },
+      exportCsv: async (id: string, operator?: string) => {
+        const q = operator ? `?operator=${encodeURIComponent(operator)}` : '';
+        const res = await fetch(BASE + `/sandbox/playbacks/${id}/export${q}`);
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const fn = res.headers.get('Content-Disposition')?.match(/filename="?([^"]+)"?/)?.[1] || 'sandbox_comparison.csv';
+        a.href = url; a.download = fn;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      },
+      delete: (id: string, operator?: string) => {
+        const q = operator ? `?operator=${encodeURIComponent(operator)}` : '';
+        return req<{ success: boolean }>(`/sandbox/playbacks/${id}${q}`, { method: 'DELETE' });
+      },
+    },
+    state: {
+      get: () => req<{ success: boolean; data: SandboxState }>('/sandbox/state'),
+      save: (body: Partial<SandboxState> & { operator?: string }) =>
+        req<{ success: boolean; data: SandboxState }>('/sandbox/state', {
+          method: 'POST', body: JSON.stringify(body),
+        }),
     },
   },
 };

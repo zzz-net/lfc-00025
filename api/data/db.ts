@@ -149,6 +149,74 @@ CREATE TABLE IF NOT EXISTS work_order_history (
 );
 CREATE INDEX IF NOT EXISTS idx_work_order_history_wo ON work_order_history(work_order_id);
 CREATE INDEX IF NOT EXISTS idx_work_order_history_created ON work_order_history(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS sandbox_rules (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'DRAFT',
+    threshold_json TEXT NOT NULL,
+    source_rule_id TEXT,
+    created_by TEXT NOT NULL DEFAULT 'system',
+    published_at TEXT,
+    published_by TEXT,
+    base_version_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_sandbox_rules_status ON sandbox_rules(status);
+CREATE INDEX IF NOT EXISTS idx_sandbox_rules_created ON sandbox_rules(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS sandbox_playbacks (
+    id TEXT PRIMARY KEY,
+    sandbox_rule_id TEXT NOT NULL REFERENCES sandbox_rules(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    source_meta_json TEXT,
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    sensor_ids_json TEXT,
+    time_start TEXT,
+    time_end TEXT,
+    total_readings INTEGER NOT NULL DEFAULT 0,
+    anomaly_count INTEGER NOT NULL DEFAULT 0,
+    result_json TEXT,
+    error_message TEXT,
+    created_by TEXT NOT NULL DEFAULT 'system',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sandbox_playbacks_rule ON sandbox_playbacks(sandbox_rule_id);
+CREATE INDEX IF NOT EXISTS idx_sandbox_playbacks_status ON sandbox_playbacks(status);
+CREATE INDEX IF NOT EXISTS idx_sandbox_playbacks_created ON sandbox_playbacks(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS sandbox_anomalies (
+    id TEXT PRIMARY KEY,
+    playback_id TEXT NOT NULL REFERENCES sandbox_playbacks(id) ON DELETE CASCADE,
+    sandbox_rule_id TEXT NOT NULL REFERENCES sandbox_rules(id) ON DELETE CASCADE,
+    sensor_id TEXT NOT NULL,
+    reading_id TEXT,
+    type TEXT NOT NULL,
+    description TEXT NOT NULL,
+    reading_timestamp TEXT NOT NULL,
+    temperature REAL,
+    humidity REAL,
+    is_new_compared_to_live INTEGER NOT NULL DEFAULT 0,
+    is_missing_compared_to_live INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_sandbox_anomalies_playback ON sandbox_anomalies(playback_id);
+CREATE INDEX IF NOT EXISTS idx_sandbox_anomalies_rule ON sandbox_anomalies(sandbox_rule_id);
+CREATE INDEX IF NOT EXISTS idx_sandbox_anomalies_sensor ON sandbox_anomalies(sensor_id);
+CREATE INDEX IF NOT EXISTS idx_sandbox_anomalies_type ON sandbox_anomalies(type);
+
+CREATE TABLE IF NOT EXISTS sandbox_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    filter_json TEXT NOT NULL DEFAULT '{}',
+    view_json TEXT NOT NULL DEFAULT '{}',
+    selected_sandbox_id TEXT,
+    selected_playback_id TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `;
 
 db.exec(DDL);
@@ -164,5 +232,11 @@ const initState = db.prepare(`
   VALUES (1, '{"selectedSensorId":null,"statusFilter":"ALL","timeRange":"ALL"}', '{}')
 `);
 initState.run();
+
+const initSandboxState = db.prepare(`
+  INSERT OR IGNORE INTO sandbox_state (id, filter_json, view_json, selected_sandbox_id, selected_playback_id)
+  VALUES (1, '{}', '{}', NULL, NULL)
+`);
+initSandboxState.run();
 
 export default db;

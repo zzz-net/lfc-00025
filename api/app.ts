@@ -21,6 +21,7 @@ import reportRoutes from './routes/report.js'
 import stateRoutes from './routes/state.js'
 import auditRoutes from './routes/audit.js'
 import workOrderRoutes from './routes/workorders.js'
+import sandboxRoutes from './routes/sandbox.js'
 
 // for esm mode
 const __filename = fileURLToPath(import.meta.url)
@@ -57,6 +58,7 @@ app.use('/api/report', reportRoutes)
 app.use('/api/state', stateRoutes)
 app.use('/api/audit', auditRoutes)
 app.use('/api/workorders', workOrderRoutes)
+app.use('/api/sandbox', sandboxRoutes)
 
 /**
  * health

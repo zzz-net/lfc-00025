@@ -282,6 +282,110 @@ export const WORK_ORDER_ACTION_LABELS: Record<WorkOrderAction, string> = {
   CANCEL: '取消工单',
 };
 
+export type SandboxRuleStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
+export type SandboxPlaybackStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+export type SandboxPlaybackSourceType = 'CSV_UPLOAD' | 'SENSOR_RANGE' | 'SAMPLE_DATA';
+
+export interface SandboxRule {
+  id: string;
+  name: string;
+  description?: string;
+  status: SandboxRuleStatus;
+  threshold: ThresholdConfig;
+  sourceRuleId?: string;
+  createdBy: string;
+  publishedAt?: string;
+  publishedBy?: string;
+  baseVersionAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SandboxPlayback {
+  id: string;
+  sandboxRuleId: string;
+  name: string;
+  sourceType: SandboxPlaybackSourceType;
+  sourceMeta?: any;
+  status: SandboxPlaybackStatus;
+  sensorIds?: string[];
+  timeStart?: string;
+  timeEnd?: string;
+  totalReadings: number;
+  anomalyCount: number;
+  result?: any;
+  errorMessage?: string;
+  createdBy: string;
+  createdAt: string;
+  completedAt?: string;
+}
+
+export interface SandboxAnomaly {
+  id: string;
+  playbackId: string;
+  sandboxRuleId: string;
+  sensorId: string;
+  readingId?: string;
+  type: AnomalyType;
+  description: string;
+  readingTimestamp: string;
+  temperature?: number;
+  humidity?: number;
+  isNewComparedToLive: number;
+  isMissingComparedToLive: number;
+  createdAt: string;
+}
+
+export interface SandboxComparisonResult {
+  summary: {
+    liveTotal: number;
+    sandboxTotal: number;
+    newCount: number;
+    missingCount: number;
+    commonCount: number;
+    delta: number;
+  };
+  bySensor: {
+    sensorId: string;
+    sensorName: string;
+    liveCount: number;
+    sandboxCount: number;
+    newCount: number;
+    missingCount: number;
+    delta: number;
+  }[];
+  byType: {
+    type: string;
+    liveCount: number;
+    sandboxCount: number;
+    newCount: number;
+    missingCount: number;
+    delta: number;
+  }[];
+  newAnomalies: SandboxAnomaly[];
+  missingAnomalies: SandboxAnomaly[];
+}
+
+export interface SandboxState {
+  filter: any;
+  view: any;
+  selectedSandboxId: string | null;
+  selectedPlaybackId: string | null;
+}
+
+export interface PublishConflictInfo {
+  hasConflict: boolean;
+  liveThreshold: ThresholdConfig;
+  sandboxThreshold: ThresholdConfig;
+  lastLiveUpdateAt: string;
+  sandboxBaseVersionAt?: string;
+  differences: {
+    field: string;
+    liveValue: number;
+    sandboxValue: number;
+  }[];
+}
+
 declare module './types' {
   interface AppState {
     workOrderFilter?: WorkOrderFilter;

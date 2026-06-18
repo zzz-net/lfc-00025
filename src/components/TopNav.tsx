@@ -1,14 +1,16 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import useQCStore from '@/store';
 import {
   Beaker, Upload, Database, Settings, FileSpreadsheet, FileText,
-  Loader2, Activity,
+  Loader2, Activity, FlaskConical,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import ThresholdDialog from './ThresholdDialog';
 import ImportDialog from './ImportDialog';
 
 export default function TopNav() {
+  const navigate = useNavigate();
   const importSample = useQCStore((s) => s.importSample);
   const sensors = useQCStore((s) => s.sensors);
   const anomalies = useQCStore((s) => s.anomalies);
@@ -111,6 +113,14 @@ export default function TopNav() {
           </button>
 
           <div className="h-6 w-px bg-slateqc-200 mx-1" />
+
+          <button
+            onClick={() => navigate('/sandbox')}
+            className="btn-secondary flex items-center gap-1.5 text-xs"
+          >
+            <FlaskConical className="w-3.5 h-3.5" />
+            规则沙盒
+          </button>
 
           <button
             onClick={() => setThresholdOpen(true)}

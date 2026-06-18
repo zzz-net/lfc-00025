@@ -172,3 +172,16 @@ export function findAnomaliesByReadingId(readingId: string): Anomaly[] {
   `).all(readingId);
   return rows.map(rowToAnomaly);
 }
+
+export function findAllUnprotectedBySensor(sensorId: string): Anomaly[] {
+  const rows: any[] = db.prepare(`
+    SELECT a.*, s.name as sensor_name,
+      r.timestamp, r.temperature, r.humidity, r.batch_id
+    FROM anomalies a
+    JOIN sensors s ON s.id = a.sensor_id
+    JOIN readings r ON r.id = a.reading_id
+    WHERE a.sensor_id = ? AND a.has_manual_override = 0
+    ORDER BY r.timestamp ASC
+  `).all(sensorId);
+  return rows.map(rowToAnomaly);
+}
