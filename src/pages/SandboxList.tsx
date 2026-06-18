@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import useQCStore from '@/store';
-import { Plus, Copy, Trash2, Play, FileSpreadsheet, Clock, Edit3, CheckCircle, AlertTriangle } from 'lucide-react';
+import { Plus, Copy, Trash2, Play, FileSpreadsheet, Clock, Edit3, CheckCircle, AlertTriangle, Shield } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { SandboxRule } from '../../../shared/types.js';
+import type { SandboxRule } from '../../shared/types.js';
 
 const STATUS_LABELS: Record<string, string> = {
   DRAFT: '草稿',
@@ -44,7 +44,11 @@ export default function SandboxList() {
       addToast({ type: 'error', message: '请输入规则名称' });
       return;
     }
-    const op = operator.trim() || 'system';
+    if (!operator.trim()) {
+      addToast({ type: 'error', message: '请输入操作人' });
+      return;
+    }
+    const op = operator.trim();
     localStorage.setItem('qc_operator', op);
     const rule = await createSandboxRule({
       name: newRuleName.trim(),
@@ -61,7 +65,12 @@ export default function SandboxList() {
   };
 
   const handleCopy = async (rule: SandboxRule) => {
-    const op = operator.trim() || 'system';
+    if (!operator.trim()) {
+      addToast({ type: 'error', message: '请输入操作人' });
+      return;
+    }
+    const op = operator.trim();
+    localStorage.setItem('qc_operator', op);
     const newRule = await copySandboxRule(rule.id, `${rule.name} 副本`, op);
     if (newRule) {
       navigate(`/sandbox/${newRule.id}`);
@@ -70,7 +79,12 @@ export default function SandboxList() {
 
   const handleDelete = async (rule: SandboxRule) => {
     if (!confirm(`确定要删除规则「${rule.name}」吗？此操作不可撤销。`)) return;
-    const op = operator.trim() || 'system';
+    if (!operator.trim()) {
+      addToast({ type: 'error', message: '请输入操作人' });
+      return;
+    }
+    const op = operator.trim();
+    localStorage.setItem('qc_operator', op);
     await deleteSandboxRule(rule.id, op);
   };
 
@@ -81,23 +95,36 @@ export default function SandboxList() {
           ← 返回看板
         </button>
         <div className="h-6 w-px bg-slateqc-200" />
-        <h1 className="text-lg font-bold text-slateqc-900">规则版本沙盒</h1>
-        <p className="text-xs text-slateqc-500">在不改动正式阈值的情况下，预览新规则的检测效果</p>
+        <h1 className="text-lg font-bold text-slateqc-900">规则变更演练中心</h1>
+        <p className="text-xs text-slateqc-500">在不改动正式阈值的情况下演练新规，支持回放对比、误报分析、冲突检测和一键发布</p>
         <div className="flex-1" />
         <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200">
+            <Shield className="w-3.5 h-3.5 text-emerald-600" />
+            <span className="text-[11px] text-emerald-700 font-medium">所有操作强制留痕</span>
+          </div>
           <input
             type="text"
-            placeholder="操作人"
+            placeholder="请输入操作人 *"
             value={operator}
             onChange={(e) => setOperator(e.target.value)}
-            className="w-28 px-3 py-1.5 text-xs border border-slateqc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-accent-blue/30"
+            className={cn(
+              'w-36 px-3 py-1.5 text-xs border rounded-lg focus:outline-none focus:ring-2',
+              operator.trim()
+                ? 'border-slateqc-200 focus:ring-accent-blue/30'
+                : 'border-red-300 bg-red-50 focus:ring-red-300/30',
+            )}
           />
           <button
             onClick={() => setShowCreateDialog(true)}
-            className="btn-primary flex items-center gap-1.5 text-xs"
+            className={cn(
+              'btn-primary flex items-center gap-1.5 text-xs',
+              !operator.trim() && 'opacity-50 cursor-not-allowed',
+            )}
+            disabled={!operator.trim()}
           >
             <Plus className="w-3.5 h-3.5" />
-            新建规则
+            新建候选规则
           </button>
         </div>
       </header>

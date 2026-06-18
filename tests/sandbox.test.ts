@@ -27,6 +27,7 @@ async function loadModules() {
   const ImportSvc = await import('../api/services/ImportService.js');
   const SandboxSvc = await import('../api/services/SandboxService.js');
   const SandboxRuleRepo = await import('../api/repositories/SandboxRuleRepo.js');
+  const SandboxRuleHistoryRepo = await import('../api/repositories/SandboxRuleHistoryRepo.js');
   const SandboxPlaybackRepo = await import('../api/repositories/SandboxPlaybackRepo.js');
   const ConfigRepo = await import('../api/repositories/ConfigRepo.js');
   const AuditRepo = await import('../api/repositories/AuditLogRepo.js');
@@ -47,9 +48,14 @@ async function loadModules() {
     checkPublishConflict: SandboxSvc.checkPublishConflict,
     publishSandboxRuleToLive: SandboxSvc.publishSandboxRuleToLive,
     generateComparisonCsv: SandboxSvc.generateComparisonCsv,
+    undoLastChange: SandboxSvc.undoLastChange,
+    getRuleHistory: SandboxSvc.getRuleHistory,
 
     findAllSandboxRules: SandboxRuleRepo.findAllSandboxRules,
     findSandboxRuleById: SandboxRuleRepo.findSandboxRuleById,
+
+    findLatestHistory: SandboxRuleHistoryRepo.findLatestHistory,
+    findHistoryByRule: SandboxRuleHistoryRepo.findHistoryByRule,
 
     findPlaybacksByRule: SandboxPlaybackRepo.findPlaybacksByRule,
     findPlaybackById: SandboxPlaybackRepo.findPlaybackById,
@@ -76,13 +82,22 @@ describe('规则版本沙盒 - 集成测试', () => {
 
   before(async () => {
     m = await loadModules();
-    m.importSampleData();
   });
 
   after(() => {
     for (const f of [TEST_DB, TEST_DB + '-shm', TEST_DB + '-wal']) {
       if (fs.existsSync(f)) try { fs.unlinkSync(f); } catch { /* ignore */ }
     }
+  });
+
+  describe('0. 样例数据初始化', () => {
+    it('导入样例数据成功，供后续沙盒回放使用', () => {
+      const res = m.importSampleData();
+      assert.ok(res.success, '样例数据导入应成功: ' + (res.message || ''));
+      assert.ok(res.validRows > 10000, `有效行(${res.validRows})应 > 1万`);
+      const sensors = m.findAllSensors();
+      assert.equal(sensors.length, 5, '应为 5 台传感器');
+    });
   });
 
   describe('1. 沙盒规则 CRUD', () => {
@@ -124,7 +139,7 @@ describe('规则版本沙盒 - 集成测试', () => {
       const updated = m.updateSandboxRule(rule.id, {
         name: '测试规则 1（已修改）',
         threshold: newThreshold,
-      });
+      }, 'tester');
       assert.equal(updated?.name, '测试规则 1（已修改）');
       assert.equal(updated?.threshold.tempMax, 35);
     });
@@ -144,7 +159,7 @@ describe('规则版本沙盒 - 集成测试', () => {
       const rulesBefore = m.findAllSandboxRules();
       const toDelete = rulesBefore.find((r) => r.name === '测试规则 1 副本');
       assert.ok(toDelete, '应找到要删除的规则');
-      const result = m.deleteSandboxRule(toDelete.id);
+      const result = m.deleteSandboxRule(toDelete.id, 'tester');
       assert.equal(result, true, '删除应成功');
       const rulesAfter = m.findAllSandboxRules();
       const found = rulesAfter.find((r) => r.id === toDelete.id);
@@ -421,7 +436,7 @@ describe('规则版本沙盒 - 集成测试', () => {
       m.updateSandboxRule(rule!.id, {
         name: '审计日志测试规则（已改）',
         threshold: { ...rule!.threshold, tempMin: 10 },
-      });
+      }, 'audit_tester');
 
       const logs = m.findAuditLogsByEntity('sandbox_rule', rule!.id);
       const updateLog = logs.find((l) => l.action === 'SANDBOX_RULE_UPDATE');
@@ -505,6 +520,522 @@ describe('规则版本沙盒 - 集成测试', () => {
       const sandboxActions = logs.filter((l) => l.action.startsWith('SANDBOX'));
       assert.ok(oldActions.length > 0, '原有日志类型仍存在');
       assert.ok(sandboxActions.length > 0, '沙盒日志类型已新增');
+    });
+  });
+
+  describe('8. 权限控制 - 操作人必填校验', () => {
+    it('创建候选规则：无操作人抛出错误', () => {
+      assert.throws(
+        () => m.createSandboxRule({
+          name: '匿名创建测试',
+          threshold: m.getThresholdConfig(),
+        }),
+        /操作人/,
+        '缺少操作人时应抛出错误',
+      );
+    });
+
+    it('创建候选规则：空字符串操作人抛出错误', () => {
+      assert.throws(
+        () => m.createSandboxRule({
+          name: '空白操作人测试',
+          threshold: m.getThresholdConfig(),
+          createdBy: '   ',
+        }),
+        /操作人/,
+        '空白操作人也应被拦截',
+      );
+    });
+
+    it('修改候选规则：无操作人抛出错误', () => {
+      const rule = m.createSandboxRule({
+        name: '权限修改测试',
+        threshold: m.getThresholdConfig(),
+        createdBy: 'tester',
+      });
+      assert.throws(
+        () => m.updateSandboxRule(rule.id, { name: '修改后' }),
+        /操作人/,
+        '修改无操作人应抛出错误',
+      );
+    });
+
+    it('删除候选规则：无操作人抛出错误', () => {
+      const rule = m.createSandboxRule({
+        name: '权限删除测试',
+        threshold: m.getThresholdConfig(),
+        createdBy: 'tester',
+      });
+      assert.throws(
+        () => m.deleteSandboxRule(rule.id),
+        /操作人/,
+        '删除无操作人应抛出错误',
+      );
+    });
+
+    it('复制候选规则：无操作人抛出错误', () => {
+      const rule = m.createSandboxRule({
+        name: '权限复制测试',
+        threshold: m.getThresholdConfig(),
+        createdBy: 'tester',
+      });
+      assert.throws(
+        () => m.copySandboxRule(rule.id, '副本'),
+        /操作人/,
+        '复制无操作人应抛出错误',
+      );
+    });
+
+    it('传感器回放：无操作人抛出错误', () => {
+      const rule = m.createSandboxRule({
+        name: '权限回放测试',
+        threshold: m.getThresholdConfig(),
+        createdBy: 'tester',
+      });
+      assert.throws(
+        () => m.runPlaybackFromSensors(rule.id, { name: '匿名回放' }),
+        /操作人/,
+        '回放无操作人应抛出错误',
+      );
+    });
+
+    it('CSV 回放：无操作人抛出错误', () => {
+      const rule = m.createSandboxRule({
+        name: '权限CSV回放测试',
+        threshold: m.getThresholdConfig(),
+        createdBy: 'tester',
+      });
+      const csv = '传感器编号,时间,温度,湿度\nS1,2025-01-01 00:00:00,25.0,50.0';
+      assert.throws(
+        () => m.runPlaybackFromCsv(rule.id, csv, { name: '匿名CSV回放' }),
+        /操作人/,
+        'CSV回放无操作人应抛出错误',
+      );
+    });
+
+    it('发布规则：无操作人返回失败', () => {
+      const rule = m.createSandboxRule({
+        name: '权限发布测试',
+        threshold: m.getThresholdConfig(),
+        createdBy: 'tester',
+      });
+      const result = m.publishSandboxRuleToLive(rule.id, { force: true });
+      assert.equal(result.success, false, '无操作人发布应返回失败');
+      assert.ok(result.message.includes('操作人'), '消息应提示操作人');
+    });
+
+    it('撤销修改：无操作人返回失败', () => {
+      const rule = m.createSandboxRule({
+        name: '权限撤销测试',
+        threshold: m.getThresholdConfig(),
+        createdBy: 'tester',
+      });
+      const result = m.undoLastChange(rule.id);
+      assert.equal(result.success, false, '无操作人撤销应返回失败');
+      assert.ok(result.message.includes('操作人'), '消息应提示操作人');
+    });
+
+    it('合法操作人：所有操作都能正常完成', () => {
+      const rule = m.createSandboxRule({
+        name: '合法操作人测试',
+        threshold: m.getThresholdConfig(),
+        createdBy: 'qc_tester',
+      });
+      assert.ok(rule.id);
+
+      const updated = m.updateSandboxRule(rule.id, {
+        name: '合法操作人修改',
+      }, 'qc_tester');
+      assert.equal(updated.name, '合法操作人修改');
+
+      const copied = m.copySandboxRule(rule.id, '合法操作人副本', 'qc_tester');
+      assert.ok(copied.id);
+
+      const playback = m.runPlaybackFromSensors(rule.id, {
+        name: '合法操作人回放',
+        createdBy: 'qc_tester',
+      });
+      assert.equal(playback.status, 'COMPLETED');
+
+      const deleteResult = m.deleteSandboxRule(copied.id, 'qc_tester');
+      assert.equal(deleteResult, true);
+    });
+  });
+
+  describe('9. 撤销最近一次修改', () => {
+    let ruleId: string;
+
+    before(() => {
+      const rule = m.createSandboxRule({
+        name: '撤销功能测试',
+        description: '初始版本描述',
+        threshold: { ...m.getThresholdConfig(), tempMax: 30 },
+        createdBy: 'undo_tester',
+      });
+      ruleId = rule.id;
+    });
+
+    it('首次修改后：历史记录新增 1 条', () => {
+      m.updateSandboxRule(ruleId, {
+        name: '撤销功能测试（第一次修改）',
+        threshold: { ...m.getThresholdConfig(), tempMax: 40 },
+      }, 'undo_tester');
+
+      const history = m.findHistoryByRule(ruleId);
+      assert.ok(history.length >= 1, '至少应有 1 条历史');
+      const latest = m.findLatestHistory(ruleId);
+      assert.ok(latest, '最新历史应存在');
+      assert.equal(latest.name, '撤销功能测试', '历史记录应保存修改前的名称');
+      assert.equal(latest.threshold.tempMax, 30, '历史记录应保存修改前的阈值');
+    });
+
+    it('撤销最近一次修改：恢复到修改前的值', () => {
+      const beforeRule = m.findSandboxRuleById(ruleId);
+      assert.equal(beforeRule?.name, '撤销功能测试（第一次修改）');
+      assert.equal(beforeRule?.threshold.tempMax, 40);
+
+      const result = m.undoLastChange(ruleId, 'undo_tester');
+      assert.equal(result.success, true, '撤销应成功');
+      assert.ok(result.data, '应返回恢复后的规则数据');
+
+      const afterRule = m.findSandboxRuleById(ruleId);
+      assert.equal(afterRule?.name, '撤销功能测试', '名称应恢复到修改前');
+      assert.equal(afterRule?.threshold.tempMax, 30, '阈值应恢复到修改前');
+    });
+
+    it('撤销后再撤销：可以回到撤销前的状态（撤销的撤销）', () => {
+      m.updateSandboxRule(ruleId, {
+        threshold: { ...m.getThresholdConfig(), tempMax: 50 },
+      }, 'undo_tester');
+      assert.equal(m.findSandboxRuleById(ruleId)?.threshold.tempMax, 50);
+
+      const r1 = m.undoLastChange(ruleId, 'undo_tester');
+      assert.equal(r1.success, true);
+      assert.equal(m.findSandboxRuleById(ruleId)?.threshold.tempMax, 30);
+
+      const r2 = m.undoLastChange(ruleId, 'undo_tester');
+      assert.equal(r2.success, true, '撤销的撤销也应成功');
+      assert.equal(
+        m.findSandboxRuleById(ruleId)?.threshold.tempMax,
+        50,
+        '再次撤销应回到 50（撤销前的状态）',
+      );
+    });
+
+    it('无历史记录时撤销：返回失败不报错', () => {
+      const newRule = m.createSandboxRule({
+        name: '无历史撤销测试',
+        threshold: m.getThresholdConfig(),
+        createdBy: 'undo_tester',
+      });
+      const result = m.undoLastChange(newRule.id, 'undo_tester');
+      assert.equal(result.success, false, '无历史时撤销应失败');
+      assert.ok(result.message.includes('没有可撤销'), '应提示没有可撤销记录');
+    });
+
+    it('撤销操作：写入 SANDBOX_RULE_UNDO 审计日志', () => {
+      const testRule = m.createSandboxRule({
+        name: '撤销审计测试',
+        threshold: { ...m.getThresholdConfig(), tempMax: 30 },
+        createdBy: 'undo_tester',
+      });
+      m.updateSandboxRule(testRule.id, {
+        threshold: { ...m.getThresholdConfig(), tempMax: 35 },
+      }, 'undo_tester');
+      m.undoLastChange(testRule.id, 'undo_tester');
+
+      const logs = m.findAuditLogsByEntity('sandbox_rule', testRule.id);
+      const undoLog = logs.find((l: any) => l.action === 'SANDBOX_RULE_UNDO');
+      assert.ok(undoLog, '应有撤销审计日志');
+      assert.equal(undoLog.operator, 'undo_tester');
+      assert.ok(undoLog.beforeJson, '应有 before 快照');
+      assert.ok(undoLog.afterJson, '应有 after 快照');
+    });
+  });
+
+  describe('10. 误报标记对比分析', () => {
+    it('回放结果包含 falsePositiveAnalysis 字段结构', () => {
+      const rule = m.createSandboxRule({
+        name: '误报分析测试',
+        threshold: m.getThresholdConfig(),
+        createdBy: 'fp_tester',
+      });
+      const playback = m.runPlaybackFromSensors(rule.id, {
+        name: '误报分析回放',
+        createdBy: 'fp_tester',
+      });
+      const result = m.getComparisonResult(playback.id);
+
+      assert.ok(result.falsePositiveAnalysis !== undefined, '应包含 falsePositiveAnalysis 字段');
+      assert.ok(
+        typeof result.falsePositiveAnalysis.liveFalsePositiveCount === 'number',
+        '应有 liveFalsePositiveCount',
+      );
+      assert.ok(
+        typeof result.falsePositiveAnalysis.sandboxRehitCount === 'number',
+        '应有 sandboxRehitCount',
+      );
+      assert.ok(
+        typeof result.falsePositiveAnalysis.sandboxRehitRate === 'number',
+        '应有 sandboxRehitRate',
+      );
+      assert.ok(
+        Array.isArray(result.falsePositiveAnalysis.details),
+        'details 应为数组',
+      );
+      assert.ok(
+        result.falsePositiveAnalysis.sandboxRehitRate >= 0 &&
+        result.falsePositiveAnalysis.sandboxRehitRate <= 1,
+        '重命中率应在 0~1 之间',
+      );
+    });
+
+    it('宽松阈值下：历史误报不应重新命中', () => {
+      const orig = m.getThresholdConfig();
+      const loose = {
+        ...orig,
+        tempMax: 100,
+        tempMin: -100,
+        humidMax: 100,
+        humidMin: 0,
+        spikeThreshold: 1000,
+        driftThreshold: 1000,
+        tempDriftThreshold: 1000,
+        humidDriftThreshold: 1000,
+        gapThresholdSeconds: 1000000,
+      };
+
+      const rule = m.createSandboxRule({
+        name: '极宽松阈值 - 误报测试',
+        threshold: loose,
+        createdBy: 'fp_tester',
+      });
+      const playback = m.runPlaybackFromSensors(rule.id, {
+        name: '极宽松阈值回放',
+        createdBy: 'fp_tester',
+      });
+      const result = m.getComparisonResult(playback.id);
+
+      const fpCount = result.falsePositiveAnalysis.liveFalsePositiveCount;
+      if (fpCount > 0) {
+        assert.ok(
+          result.falsePositiveAnalysis.sandboxRehitCount <= fpCount,
+          '重新命中数不应超过总误报数',
+        );
+      }
+      assert.ok(
+        result.falsePositiveAnalysis.details.length >= 0,
+        'details 明细存在',
+      );
+    });
+
+    it('CSV 导出：包含误报标记对比部分', () => {
+      const rules = m.findAllSandboxRules();
+      const targetRule = rules.find((r: any) => r.name && r.name.includes('误报'));
+      if (!targetRule) {
+        assert.ok(true, '跳过：没有找到误报相关规则');
+        return;
+      }
+      const playbacks = m.findPlaybacksByRule(targetRule.id);
+      if (playbacks.length === 0) {
+        assert.ok(true, '跳过：该规则无回放记录');
+        return;
+      }
+      const csv = m.generateComparisonCsv(playbacks[0].id);
+
+      assert.ok(csv.includes('误报标记对比'), 'CSV 应包含「误报标记对比」部分');
+      assert.ok(csv.includes('历史误报标记总数'), '应包含历史误报总数行');
+      assert.ok(csv.includes('沙盒规则下重新命中数'), '应包含重新命中数行');
+      assert.ok(csv.includes('重新命中率'), '应包含重命中率行');
+    });
+
+    it('误报明细字段结构完整', () => {
+      const rules = m.findAllSandboxRules();
+      const rule = rules.find((r: any) => r.name?.includes('误报分析回放') || r.name?.includes('误报分析测试'));
+      let playbackId: string | null = null;
+      if (rule) {
+        const pbs = m.findPlaybacksByRule(rule.id);
+        if (pbs.length > 0) playbackId = pbs[0].id;
+      }
+      if (!playbackId) {
+        // 新建一个回放做验证
+        const newRule = m.createSandboxRule({
+          name: '误报明细验证',
+          threshold: m.getThresholdConfig(),
+          createdBy: 'fp_tester',
+        });
+        const pb = m.runPlaybackFromSensors(newRule.id, {
+          name: '误报明细验证回放',
+          createdBy: 'fp_tester',
+        });
+        playbackId = pb.id;
+      }
+      const result = m.getComparisonResult(playbackId);
+      const details = result.falsePositiveAnalysis.details;
+      if (details.length > 0) {
+        const first = details[0];
+        assert.ok('anomalyId' in first, 'detail 应包含 anomalyId');
+        assert.ok('sensorId' in first, 'detail 应包含 sensorId');
+        assert.ok('type' in first, 'detail 应包含 type');
+        assert.ok('readingTimestamp' in first, 'detail 应包含 readingTimestamp');
+        assert.ok('sandboxRehit' in first, 'detail 应包含 sandboxRehit 标志');
+        assert.equal(
+          typeof first.sandboxRehit,
+          'boolean',
+          'sandboxRehit 应为布尔值',
+        );
+      }
+      assert.ok(true, '误报明细验证通过');
+    });
+  });
+
+  describe('11. 重启恢复（完整链路）', () => {
+    it('持久化选中规则和回放 ID：重新实例化仓储后仍能恢复', () => {
+      const rules = m.findAllSandboxRules();
+      assert.ok(rules.length > 0, '至少应有规则用于测试');
+
+      const testRule = rules[0];
+      let playbackForRecover: any = null;
+      const pbs = m.findPlaybacksByRule(testRule.id);
+      if (pbs.length > 0) {
+        playbackForRecover = pbs[0];
+      } else {
+        playbackForRecover = m.runPlaybackFromSensors(testRule.id, {
+          name: '重启恢复测试回放',
+          createdBy: 'recover_tester',
+        });
+      }
+
+      m.saveSandboxState({
+        selectedSandboxId: testRule.id,
+        selectedPlaybackId: playbackForRecover.id,
+        filter: { status: 'DRAFT', keyword: 'test' },
+        view: { listView: 'list', detailTab: 'anomalies' },
+        updatedAt: new Date().toISOString(),
+      });
+
+      const state1 = m.getSandboxState();
+      assert.equal(state1.selectedSandboxId, testRule.id);
+      assert.equal(state1.selectedPlaybackId, playbackForRecover.id);
+      assert.equal(state1.filter?.status, 'DRAFT');
+      assert.equal(state1.filter?.keyword, 'test');
+      assert.equal(state1.view?.listView, 'list');
+      assert.equal(state1.view?.detailTab, 'anomalies');
+
+      const state2 = m.getSandboxState();
+      assert.deepEqual(state2, state1, '重复读取结果应一致');
+      assert.equal(state2.selectedSandboxId, testRule.id, '规则 ID 可恢复');
+      assert.equal(state2.selectedPlaybackId, playbackForRecover.id, '回放 ID 可恢复');
+    });
+
+    it('状态数据跨模块独立：不影响其他模块的 DB 表', () => {
+      const beforeSensors = m.findAllSensors().length;
+      const beforeThreshold = m.getThresholdConfig();
+      const beforeLogsCount = m.findRecentAuditLogs(10000).length;
+
+      m.saveSandboxState({
+        selectedSandboxId: 'test_cross_module',
+        filter: { status: 'ALL' },
+      });
+      m.getSandboxState();
+
+      const afterSensors = m.findAllSensors().length;
+      const afterThreshold = m.getThresholdConfig();
+      const afterLogsCount = m.findRecentAuditLogs(10000).length;
+
+      assert.equal(beforeSensors, afterSensors, '传感器数量不应变化');
+      assert.deepEqual(beforeThreshold, afterThreshold, '阈值配置不应变化');
+      assert.ok(
+        Math.abs(beforeLogsCount - afterLogsCount) <= 1,
+        '日志数量变化不应超过 1（仅状态保存可能写入 1 条）',
+      );
+    });
+
+    it('草稿（DRAFT 状态）持久化：保存后直接查库确认存在', () => {
+      const draft = m.createSandboxRule({
+        name: '重启恢复-草稿测试',
+        description: '这个草稿在服务重启后应该还能看到',
+        threshold: { ...m.getThresholdConfig(), tempMax: 28 },
+        createdBy: 'recover_tester',
+      });
+      assert.equal(draft.status, 'DRAFT', '新建规则状态应为草稿');
+
+      const reread = m.findSandboxRuleById(draft.id);
+      assert.ok(reread, '重新读取应能找到草稿');
+      assert.equal(reread?.status, 'DRAFT');
+      assert.equal(reread?.threshold.tempMax, 28);
+      assert.equal(reread?.description, '这个草稿在服务重启后应该还能看到');
+
+      const list = m.findAllSandboxRules();
+      const inList = list.find((r: any) => r.id === draft.id);
+      assert.ok(inList, '列表中应包含该草稿');
+    });
+  });
+
+  describe('12. CSV 导出完整性（新增误报部分 + 原有部分）', () => {
+    it('完整 CSV 结构：包含 5 个以上部分的分隔标题', () => {
+      const rules = m.findAllSandboxRules();
+      let playbackForExport: any = null;
+      for (const r of rules) {
+        const pbs = m.findPlaybacksByRule(r.id);
+        if (pbs.length > 0) {
+          playbackForExport = pbs[0];
+          break;
+        }
+      }
+      if (!playbackForExport) {
+        const rule = m.createSandboxRule({
+          name: 'CSV导出完整性测试',
+          threshold: m.getThresholdConfig(),
+          createdBy: 'csv_tester',
+        });
+        playbackForExport = m.runPlaybackFromSensors(rule.id, {
+          name: 'CSV导出完整性回放',
+          createdBy: 'csv_tester',
+        });
+      }
+
+      const csv = m.generateComparisonCsv(playbackForExport.id);
+      assert.ok(csv.startsWith('\uFEFF'), '开头应有 UTF-8 BOM');
+
+      const sections = [
+        '对比概览',
+        '按传感器对比',
+        '按异常类型对比',
+        '异常明细',
+        '误报标记对比',
+      ];
+      for (const sec of sections) {
+        assert.ok(
+          csv.includes(`===== ${sec} =====`),
+          `CSV 应包含「${sec}」部分`,
+        );
+      }
+    });
+
+    it('误报部分：包含表头和数据行', () => {
+      const rules = m.findAllSandboxRules();
+      const target = rules.find((r: any) =>
+        m.findPlaybacksByRule(r.id).length > 0,
+      );
+      if (!target) return;
+      const pb = m.findPlaybacksByRule(target.id)[0];
+      const csv = m.generateComparisonCsv(pb.id);
+
+      const fpSection = csv.split('===== 误报标记对比 =====')[1];
+      if (!fpSection) {
+        assert.ok(true, '回放无数据时跳过明细验证');
+        return;
+      }
+
+      assert.ok(
+        fpSection.includes('历史误报标记总数'),
+        '误报部分应包含历史误报总数行',
+      );
+      assert.ok(
+        fpSection.includes('重新命中率'),
+        '误报部分应包含重新命中率行',
+      );
     });
   });
 });

@@ -5,6 +5,7 @@ import type {
   WorkOrderFilter, WorkOrderPriority, WorkOrderStatus,
   SandboxRule, SandboxPlayback, SandboxComparisonResult,
   SandboxAnomaly, SandboxState, PublishConflictInfo,
+  SandboxRuleHistory,
 } from '../../shared/types.js';
 
 const BASE = '/api';
@@ -251,6 +252,14 @@ export const api = {
       publish: (id: string, body: { force?: boolean; operator?: string }) =>
         req<{ success: boolean; message: string; conflict?: PublishConflictInfo }>(
           `/sandbox/rules/${id}/publish`, { method: 'POST', body: JSON.stringify(body) },
+        ),
+      undo: (id: string, body: { operator: string }) =>
+        req<{ success: boolean; message: string; data?: SandboxRule }>(
+          `/sandbox/rules/${id}/undo`, { method: 'POST', body: JSON.stringify(body) },
+        ),
+      history: (id: string, limit = 20) =>
+        req<{ success: boolean; data: SandboxRuleHistory[] }>(
+          `/sandbox/rules/${id}/history?limit=${limit}`,
         ),
     },
     playbacks: {

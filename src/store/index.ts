@@ -6,6 +6,7 @@ import type {
   WorkOrder, WorkOrderFilter, WorkOrderPriority, WorkOrderStatus,
   SandboxRule, SandboxPlayback, SandboxComparisonResult,
   SandboxState, PublishConflictInfo, SandboxAnomaly,
+  SandboxRuleHistory,
 } from '../../shared/types.js';
 
 interface Toast {
@@ -92,6 +93,7 @@ interface QCStore {
   publishConflict: PublishConflictInfo | null;
   sandboxLoading: Record<string, boolean>;
   sandboxState: SandboxState | null;
+  sandboxRuleHistory: SandboxRuleHistory[];
 
   loadSandboxRules: () => Promise<void>;
   loadSandboxRule: (id: string) => Promise<void>;
@@ -99,6 +101,8 @@ interface QCStore {
   updateSandboxRule: (id: string, body: { name?: string; description?: string; threshold?: ThresholdConfig; operator?: string }) => Promise<void>;
   deleteSandboxRule: (id: string, operator?: string) => Promise<void>;
   copySandboxRule: (id: string, newName?: string, operator?: string) => Promise<SandboxRule | null>;
+  undoSandboxRule: (id: string, operator: string) => Promise<boolean>;
+  loadSandboxRuleHistory: (id: string) => Promise<void>;
   selectSandboxRule: (id: string | null) => Promise<void>;
   loadSandboxPlaybacks: (ruleId: string) => Promise<void>;
   runPlaybackFromSensors: (ruleId: string, body: { name?: string; sensorIds?: string[]; timeStart?: string; timeEnd?: string; operator?: string }) => Promise<void>;
@@ -150,6 +154,7 @@ export const useQCStore = create<QCStore>((set, get) => ({
   publishConflict: null,
   sandboxLoading: {},
   sandboxState: null,
+  sandboxRuleHistory: [],
 
   addToast: (t) => {
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -575,12 +580,43 @@ export const useQCStore = create<QCStore>((set, get) => ({
     }
   },
 
+  undoSandboxRule: async (id, operator) => {
+    try {
+      const res = await api.sandbox.rules.undo(id, { operator });
+      if (res.success) {
+        get().addToast({ type: 'success', message: res.message || '已撤销最近一次修改' });
+        if (res.data) {
+          set({ currentSandboxRule: res.data });
+        }
+        await get().loadSandboxRules();
+        await get().loadSandboxRuleHistory(id);
+        return true;
+      } else {
+        get().addToast({ type: 'warning', message: res.message || '撤销失败' });
+        return false;
+      }
+    } catch (e: any) {
+      get().addToast({ type: 'error', message: '撤销失败: ' + e.message });
+      return false;
+    }
+  },
+
+  loadSandboxRuleHistory: async (id) => {
+    try {
+      const res = await api.sandbox.rules.history(id);
+      set({ sandboxRuleHistory: res.data });
+    } catch (e: any) {
+      get().addToast({ type: 'error', message: '加载历史失败: ' + e.message });
+    }
+  },
+
   selectSandboxRule: async (id) => {
     set({ selectedSandboxRuleId: id, selectedPlaybackId: null, currentPlayback: null, comparisonResult: null });
     if (id) {
       await Promise.all([
         get().loadSandboxRule(id),
         get().loadSandboxPlaybacks(id),
+        get().loadSandboxRuleHistory(id),
       ]);
     }
     await get().persistSandboxState();

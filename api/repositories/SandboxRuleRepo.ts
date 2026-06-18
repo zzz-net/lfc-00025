@@ -1,5 +1,6 @@
 import { db } from '../data/db.js';
 import { generateId } from '../utils/fileHash.js';
+import { insertRuleHistory } from './SandboxRuleHistoryRepo.js';
 import type { SandboxRule, SandboxRuleStatus, ThresholdConfig } from '../../shared/types.js';
 
 function rowToSandboxRule(row: any): SandboxRule {
@@ -85,10 +86,31 @@ export function updateSandboxRule(
     status?: SandboxRuleStatus;
     publishedAt?: string | null;
     publishedBy?: string | null;
+    changedBy?: string;
+    skipHistory?: boolean;
   },
 ): SandboxRule | null {
   const current = findSandboxRuleById(id);
   if (!current) return null;
+
+  if (!data.skipHistory && (data.name !== undefined || data.description !== undefined || data.threshold !== undefined)) {
+    const hasChange =
+      (data.name !== undefined && data.name !== current.name) ||
+      (data.description !== undefined && data.description !== (current.description ?? null)) ||
+      (data.threshold !== undefined && JSON.stringify(data.threshold) !== JSON.stringify(current.threshold));
+    if (hasChange) {
+      try {
+        insertRuleHistory({
+          sandboxRuleId: id,
+          name: current.name,
+          description: current.description,
+          threshold: current.threshold,
+          changedBy: data.changedBy || 'system',
+          changeReason: '更新规则前快照',
+        });
+      } catch { /* ignore history errors */ }
+    }
+  }
 
   const fields: string[] = [];
   const params: any[] = [];

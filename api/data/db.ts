@@ -217,6 +217,19 @@ CREATE TABLE IF NOT EXISTS sandbox_state (
     selected_playback_id TEXT,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS sandbox_rule_history (
+    id TEXT PRIMARY KEY,
+    sandbox_rule_id TEXT NOT NULL REFERENCES sandbox_rules(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT,
+    threshold_json TEXT NOT NULL,
+    changed_by TEXT NOT NULL,
+    change_reason TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_sandbox_rule_history_rule ON sandbox_rule_history(sandbox_rule_id);
+CREATE INDEX IF NOT EXISTS idx_sandbox_rule_history_created ON sandbox_rule_history(created_at DESC);
 `;
 
 db.exec(DDL);

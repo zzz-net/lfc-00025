@@ -119,7 +119,7 @@ export default function TopNav() {
             className="btn-secondary flex items-center gap-1.5 text-xs"
           >
             <FlaskConical className="w-3.5 h-3.5" />
-            规则沙盒
+            规则演练中心
           </button>
 
           <button

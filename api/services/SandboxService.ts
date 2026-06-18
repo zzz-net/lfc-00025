@@ -6,19 +6,23 @@ import { findAllUnprotectedBySensor } from '../repositories/AnomalyRepo.js';
 import {
   createPlayback, updatePlaybackStatus, insertSandboxAnomalies,
   findSandboxAnomaliesByPlayback, countSandboxAnomaliesByPlayback,
+  findPlaybackById,
 } from '../repositories/SandboxPlaybackRepo.js';
 import {
   findSandboxRuleById, findAllSandboxRules, createSandboxRule as createSandboxRuleRepo,
   updateSandboxRule as updateSandboxRuleRepo, deleteSandboxRule as deleteSandboxRuleRepo,
   copySandboxRule as copySandboxRuleRepo, publishSandboxRule,
 } from '../repositories/SandboxRuleRepo.js';
+import {
+  findLatestHistory, findHistoryByRule, insertRuleHistory,
+} from '../repositories/SandboxRuleHistoryRepo.js';
 import { insertAuditLog } from '../repositories/AuditLogRepo.js';
 import { parseCsvContent } from '../utils/csvParser.js';
 import { generateId } from '../utils/fileHash.js';
 import { db } from '../data/db.js';
 import type {
   ThresholdConfig, SandboxPlayback, SandboxAnomaly, SandboxComparisonResult,
-  PublishConflictInfo, AnomalyType,
+  PublishConflictInfo, AnomalyType, SandboxRuleHistory, SandboxRuleStatus,
 } from '../../shared/types.js';
 
 export function runPlaybackFromSensors(
@@ -31,10 +35,14 @@ export function runPlaybackFromSensors(
     createdBy?: string;
   } = {},
 ): SandboxPlayback {
+  if (!options.createdBy || typeof options.createdBy !== 'string' || !options.createdBy.trim()) {
+    throw new Error('缺少操作人标识，匿名请求不允许发起回放');
+  }
   const rule = findSandboxRuleById(ruleId);
   if (!rule) throw new Error('沙盒规则不存在');
 
   const playbackName = options.name || `回放 - ${new Date().toLocaleString('zh-CN')}`;
+  const op = options.createdBy.trim();
   const playback = createPlayback({
     sandboxRuleId: ruleId,
     name: playbackName,
@@ -42,7 +50,7 @@ export function runPlaybackFromSensors(
     sensorIds: options.sensorIds,
     timeStart: options.timeStart,
     timeEnd: options.timeEnd,
-    createdBy: options.createdBy,
+    createdBy: op,
     sourceMeta: {
       sensorIds: options.sensorIds,
       timeStart: options.timeStart,
@@ -82,7 +90,7 @@ export function runPlaybackFromSensors(
       action: 'SANDBOX_PLAYBACK_COMPLETE',
       entityType: 'sandbox_playback',
       entityId: playback.id,
-      operator: options.createdBy || 'system',
+      operator: op,
       after: { ruleName: rule.name, playbackName, readingCount: allReadings.length },
       detail: `沙盒回放完成：${rule.name} - ${playbackName}`,
     });
@@ -105,10 +113,14 @@ export function runPlaybackFromCsv(
     fileName?: string;
   } = {},
 ): SandboxPlayback {
+  if (!options.createdBy || typeof options.createdBy !== 'string' || !options.createdBy.trim()) {
+    throw new Error('缺少操作人标识，匿名请求不允许发起 CSV 回放');
+  }
   const rule = findSandboxRuleById(ruleId);
   if (!rule) throw new Error('沙盒规则不存在');
 
   const playbackName = options.name || `CSV回放 - ${options.fileName || new Date().toLocaleString('zh-CN')}`;
+  const op = options.createdBy.trim();
 
   const batchId = generateId('tmp_');
   const parseResult = parseCsvContent(csvContent, batchId);
@@ -118,7 +130,7 @@ export function runPlaybackFromCsv(
     name: playbackName,
     sourceType: 'CSV_UPLOAD',
     sensorIds: parseResult.sensors.map((s) => s.id),
-    createdBy: options.createdBy,
+    createdBy: op,
     sourceMeta: {
       fileName: options.fileName,
       totalRows: parseResult.totalRows,
@@ -151,7 +163,7 @@ export function runPlaybackFromCsv(
       action: 'SANDBOX_PLAYBACK_COMPLETE',
       entityType: 'sandbox_playback',
       entityId: playback.id,
-      operator: options.createdBy || 'system',
+      operator: op,
       after: { ruleName: rule.name, playbackName, readingCount: allReadings.length, fileName: options.fileName },
       detail: `CSV沙盒回放完成：${rule.name} - ${playbackName}`,
     });
@@ -255,21 +267,29 @@ function _runDetectionAndCompare(
   }
 
   const count = insertSandboxAnomalies(playbackId, ruleId, sandboxAnomalies);
-  updatePlaybackStatus(playbackId, 'RUNNING', { anomalyCount: count });
-}
+    updatePlaybackStatus(playbackId, 'RUNNING', { anomalyCount: count });
+
+    const fpAnalysis = _analyzeFalsePositives(sensorIds, ruleId, threshold, readings);
+    const currentPb = findPlaybackById(playbackId);
+    const existingResult = currentPb?.result || {};
+    updatePlaybackStatus(playbackId, 'RUNNING', {
+      result: { ...existingResult, falsePositiveAnalysis: fpAnalysis },
+    });
+  }
 
 export function getComparisonResult(playbackId: string): SandboxComparisonResult {
-  const playback = findSandboxAnomaliesByPlayback(playbackId);
+  const anomalies = findSandboxAnomaliesByPlayback(playbackId);
   const stats = countSandboxAnomaliesByPlayback(playbackId);
   const allSensors = findAllSensors();
   const sensorMap = new Map(allSensors.map((s) => [s.id, s]));
+  const playbackInfo = findPlaybackById(playbackId);
 
-  const newAnomalies = playback.filter((a) => a.isNewComparedToLive === 1);
-  const missingAnomalies = playback.filter((a) => a.isMissingComparedToLive === 1);
+  const newAnomalies = anomalies.filter((a) => a.isNewComparedToLive === 1);
+  const missingAnomalies = anomalies.filter((a) => a.isMissingComparedToLive === 1);
   const commonCount = stats.total - stats.newCount - stats.missingCount;
 
   const bySensorMap: Record<string, { liveCount: number; sandboxCount: number; newCount: number; missingCount: number }> = {};
-  for (const a of playback) {
+  for (const a of anomalies) {
     if (!bySensorMap[a.sensorId]) {
       bySensorMap[a.sensorId] = { liveCount: 0, sandboxCount: 0, newCount: 0, missingCount: 0 };
     }
@@ -297,7 +317,7 @@ export function getComparisonResult(playbackId: string): SandboxComparisonResult
   bySensor.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
 
   const byTypeMap: Record<string, { liveCount: number; sandboxCount: number; newCount: number; missingCount: number }> = {};
-  for (const a of playback) {
+  for (const a of anomalies) {
     if (!byTypeMap[a.type]) {
       byTypeMap[a.type] = { liveCount: 0, sandboxCount: 0, newCount: 0, missingCount: 0 };
     }
@@ -339,6 +359,7 @@ export function getComparisonResult(playbackId: string): SandboxComparisonResult
     byType,
     newAnomalies: newAnomalies.slice(0, 100),
     missingAnomalies: missingAnomalies.slice(0, 100),
+    falsePositiveAnalysis: playbackInfo?.result?.falsePositiveAnalysis,
   };
 }
 
@@ -394,6 +415,13 @@ export function publishSandboxRuleToLive(
   ruleId: string,
   options: { force?: boolean; operator?: string } = {},
 ): { success: boolean; message: string; conflict?: PublishConflictInfo } {
+  if (!options.operator || typeof options.operator !== 'string' || !options.operator.trim()) {
+    return {
+      success: false,
+      message: '缺少操作人标识，匿名请求不允许发布候选规则',
+    };
+  }
+  const op = options.operator.trim();
   const rule = findSandboxRuleById(ruleId);
   if (!rule) throw new Error('沙盒规则不存在');
 
@@ -409,19 +437,19 @@ export function publishSandboxRuleToLive(
   const beforeThreshold = getThresholdConfig();
   updateThresholdConfig(rule.threshold);
 
-  publishSandboxRule(ruleId, options.operator);
+  publishSandboxRule(ruleId, op);
 
   updateSandboxRule(ruleId, {
     status: 'PUBLISHED',
     publishedAt: new Date().toISOString(),
-    publishedBy: options.operator || 'system',
-  });
+    publishedBy: op,
+  }, op);
 
   insertAuditLog({
     action: 'SANDBOX_RULE_PUBLISH',
     entityType: 'sandbox_rule',
     entityId: ruleId,
-    operator: options.operator || 'system',
+    operator: op,
     before: beforeThreshold,
     after: rule.threshold,
     detail: `沙盒规则「${rule.name}」已发布为正式阈值${conflict.hasConflict ? '（强制发布，已覆盖冲突）' : ''}`,
@@ -481,6 +509,28 @@ export function generateComparisonCsv(playbackId: string): string {
     ].join(','));
   }
 
+  if (result.falsePositiveAnalysis) {
+    lines.push('');
+    lines.push('===== 误报标记对比 =====');
+    lines.push(`历史误报标记总数,${result.falsePositiveAnalysis.liveFalsePositiveCount}`);
+    lines.push(`沙盒规则下重新命中数,${result.falsePositiveAnalysis.sandboxRehitCount}`);
+    lines.push(`重新命中率（%）,${(result.falsePositiveAnalysis.sandboxRehitRate * 100).toFixed(2)}`);
+    lines.push('');
+    lines.push('误报明细,异常ID,传感器ID,类型,原异常描述,时间,标注原因,沙盒是否重新命中');
+    for (const fp of result.falsePositiveAnalysis.details) {
+      lines.push([
+        '',
+        fp.anomalyId,
+        fp.sensorId,
+        fp.type,
+        `"${fp.description.replace(/"/g, '""')}"`,
+        fp.readingTimestamp,
+        `"${fp.annotationReason.replace(/"/g, '""')}"`,
+        fp.sandboxRehit ? '是' : '否',
+      ].join(','));
+    }
+  }
+
   return '\uFEFF' + lines.join('\n');
 }
 
@@ -499,6 +549,9 @@ export function createSandboxRule(data: {
   createdBy?: string;
   baseVersionAt?: string;
 }) {
+  if (!data.createdBy || typeof data.createdBy !== 'string' || !data.createdBy.trim()) {
+    throw new Error('缺少操作人标识，匿名请求不允许创建候选规则');
+  }
   let baseVersionAt = data.baseVersionAt;
   if (!baseVersionAt) {
     const row: any = db.prepare('SELECT updated_at FROM threshold_config WHERE id = 1').get();
@@ -509,8 +562,7 @@ export function createSandboxRule(data: {
     name: data.name,
     description: data.description,
     threshold: data.threshold,
-    status: 'DRAFT',
-    createdBy: data.createdBy || 'system',
+    createdBy: data.createdBy.trim(),
     baseVersionAt,
   });
 
@@ -518,7 +570,7 @@ export function createSandboxRule(data: {
     action: 'SANDBOX_RULE_CREATE',
     entityType: 'sandbox_rule',
     entityId: rule.id,
-    operator: data.createdBy || 'system',
+    operator: data.createdBy.trim(),
     after: { name: rule.name, threshold: rule.threshold },
     detail: `创建沙盒规则「${rule.name}」`,
   });
@@ -528,19 +580,25 @@ export function createSandboxRule(data: {
 
 export function updateSandboxRule(ruleId: string, data: {
   name?: string;
+  description?: string;
   threshold?: ThresholdConfig;
-  status?: string;
+  status?: SandboxRuleStatus;
+  publishedAt?: string;
+  publishedBy?: string;
 }, operator?: string) {
+  if (!operator || typeof operator !== 'string' || !operator.trim()) {
+    throw new Error('缺少操作人标识，匿名请求不允许修改候选规则');
+  }
   const before = findSandboxRuleById(ruleId);
   if (!before) throw new Error('沙盒规则不存在');
 
-  const rule = updateSandboxRuleRepo(ruleId, data);
+  const rule = updateSandboxRuleRepo(ruleId, { ...data, changedBy: operator.trim() });
 
   insertAuditLog({
     action: 'SANDBOX_RULE_UPDATE',
     entityType: 'sandbox_rule',
     entityId: ruleId,
-    operator: operator || 'system',
+    operator: operator.trim(),
     before: { name: before.name, threshold: before.threshold },
     after: { name: rule.name, threshold: rule.threshold },
     detail: `更新沙盒规则「${rule.name}」`,
@@ -550,6 +608,9 @@ export function updateSandboxRule(ruleId: string, data: {
 }
 
 export function deleteSandboxRule(ruleId: string, operator?: string) {
+  if (!operator || typeof operator !== 'string' || !operator.trim()) {
+    throw new Error('缺少操作人标识，匿名请求不允许删除候选规则');
+  }
   const rule = findSandboxRuleById(ruleId);
   if (!rule) throw new Error('沙盒规则不存在');
 
@@ -559,7 +620,7 @@ export function deleteSandboxRule(ruleId: string, operator?: string) {
     action: 'SANDBOX_RULE_DELETE',
     entityType: 'sandbox_rule',
     entityId: ruleId,
-    operator: operator || 'system',
+    operator: operator.trim(),
     before: { name: rule.name },
     detail: `删除沙盒规则「${rule.name}」`,
   });
@@ -568,19 +629,161 @@ export function deleteSandboxRule(ruleId: string, operator?: string) {
 }
 
 export function copySandboxRule(sourceId: string, newName: string, operator?: string) {
+  if (!operator || typeof operator !== 'string' || !operator.trim()) {
+    throw new Error('缺少操作人标识，匿名请求不允许复制候选规则');
+  }
   const source = findSandboxRuleById(sourceId);
   if (!source) throw new Error('沙盒规则不存在');
 
-  const newRule = copySandboxRuleRepo(sourceId, newName, operator || source.createdBy);
+  const newRule = copySandboxRuleRepo(sourceId, newName, operator.trim());
 
   insertAuditLog({
     action: 'SANDBOX_RULE_COPY',
     entityType: 'sandbox_rule',
     entityId: newRule.id,
-    operator: operator || 'system',
+    operator: operator.trim(),
     after: { name: newRule.name, sourceRuleId: sourceId },
     detail: `复制沙盒规则「${source.name}」为「${newRule.name}」`,
   });
 
   return newRule;
+}
+
+export function getRuleHistory(ruleId: string, limit = 20): SandboxRuleHistory[] {
+  return findHistoryByRule(ruleId, limit);
+}
+
+export function undoLastChange(ruleId: string, operator?: string): {
+  success: boolean;
+  message: string;
+  data?: any;
+} {
+  if (!operator || typeof operator !== 'string' || !operator.trim()) {
+    return {
+      success: false,
+      message: '缺少操作人标识，匿名请求不允许撤销修改',
+    };
+  }
+  const rule = findSandboxRuleById(ruleId);
+  if (!rule) throw new Error('沙盒规则不存在');
+
+  const latest = findLatestHistory(ruleId);
+  if (!latest) {
+    return {
+      success: false,
+      message: '没有可撤销的修改记录',
+    };
+  }
+
+  const op = operator || 'system';
+  insertRuleHistory({
+    sandboxRuleId: ruleId,
+    name: rule.name,
+    description: rule.description,
+    threshold: rule.threshold,
+    changedBy: op,
+    changeReason: '撤销前快照',
+  });
+
+  const updated = updateSandboxRuleRepo(ruleId, {
+    name: latest.name,
+    description: latest.description,
+    threshold: latest.threshold,
+    changedBy: op,
+    skipHistory: true,
+  });
+
+  insertAuditLog({
+    action: 'SANDBOX_RULE_UNDO',
+    entityType: 'sandbox_rule',
+    entityId: ruleId,
+    operator: op,
+    before: { name: rule.name, threshold: rule.threshold },
+    after: { name: latest.name, threshold: latest.threshold },
+    detail: `撤销规则「${rule.name}」的最近一次修改，恢复到「${latest.name}」版本`,
+  });
+
+  return {
+    success: true,
+    message: '已撤销最近一次修改',
+    data: updated,
+  };
+}
+
+function _analyzeFalsePositives(
+  sensorIds: string[],
+  ruleId: string,
+  sandboxThreshold: ThresholdConfig,
+  allReadings: Array<{ sensorId: string; timestamp: string; temperature: number; humidity: number; readingId: string }>,
+) {
+  const fpRows: any[] = db.prepare(`
+    SELECT a.id as anomaly_id, a.type, a.sensor_id, a.reading_id, a.description,
+           r.timestamp, r.temperature, r.humidity,
+           an.status, an.handler, an.reason
+    FROM anomalies a
+    JOIN readings r ON a.reading_id = r.id
+    JOIN annotations an ON an.anomaly_id = a.id
+    WHERE an.status = 'FALSE_POSITIVE'
+      AND an.rolled_back_at IS NULL
+  `).all();
+
+  if (fpRows.length === 0) {
+    return {
+      liveFalsePositiveCount: 0,
+      sandboxRehitCount: 0,
+      sandboxRehitRate: 0,
+      details: [],
+    };
+  }
+
+  const readingMap = new Map(
+    allReadings.map((r) => [`${r.sensorId}:${r.timestamp}`, r]),
+  );
+  const sensorReadingGroups: Record<string, typeof allReadings> = {};
+  for (const r of allReadings) {
+    if (!sensorReadingGroups[r.sensorId]) sensorReadingGroups[r.sensorId] = [];
+    sensorReadingGroups[r.sensorId].push(r);
+  }
+
+  const sandboxKeysBySensor: Record<string, Set<string>> = {};
+  for (const sid of Object.keys(sensorReadingGroups)) {
+    const detected = detectFromReadings(
+      sensorReadingGroups[sid].map((r) => ({
+        id: r.readingId,
+        sensorId: r.sensorId,
+        timestamp: r.timestamp,
+        temperature: r.temperature,
+        humidity: r.humidity,
+        batchId: '',
+      })),
+      sandboxThreshold,
+    );
+    sandboxKeysBySensor[sid] = new Set(
+      detected.map((d) => `${d.type}:${d.readingId}`),
+    );
+  }
+
+  const details = fpRows.map((fp) => {
+    const key = `${fp.type}:${fp.reading_id}`;
+    const sensorKeys = sandboxKeysBySensor[fp.sensor_id];
+    const rehit = sensorKeys ? sensorKeys.has(key) : false;
+    return {
+      anomalyId: fp.anomaly_id,
+      type: fp.type as AnomalyType,
+      sensorId: fp.sensor_id,
+      description: fp.description || '',
+      readingTimestamp: fp.timestamp,
+      annotationReason: fp.reason || '',
+      sandboxRehit: rehit,
+    };
+  });
+
+  const rehitCount = details.filter((d) => d.sandboxRehit).length;
+
+  return {
+    liveFalsePositiveCount: fpRows.length,
+    sandboxRehitCount: rehitCount,
+    sandboxRehitRate: fpRows.length > 0 ? rehitCount / fpRows.length : 0,
+    details: details.slice(0, 100),
+  };
 }

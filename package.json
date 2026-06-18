@@ -14,7 +14,9 @@
     "server:start": "tsx api/server.ts",
     "start": "cross-env NODE_ENV=production npm run server:start",
     "test": "tsx --test tests/qc-closed-loop.test.ts tests/regression-hard-fixes.test.ts tests/workorder.test.ts 2>&1",
-    "test:ci": "tsx --test tests/qc-closed-loop.test.ts tests/regression-hard-fixes.test.ts tests/workorder.test.ts"
+    "test:ci": "tsx --test tests/qc-closed-loop.test.ts tests/regression-hard-fixes.test.ts tests/workorder.test.ts",
+    "test:sandbox": "tsx --test tests/sandbox.test.ts 2>&1",
+    "test:all": "tsx --test tests/qc-closed-loop.test.ts tests/regression-hard-fixes.test.ts tests/workorder.test.ts tests/sandbox.test.ts 2>&1"
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0",

@@ -283,15 +283,18 @@ npm start
 └── 样式         TailwindCSS 3 + 自定义主题 slateqc/accent
 
 后端 (Express 4 + better-sqlite3)
-├── 路由层        api/routes/*.ts (7个模块)
-├── 服务层        ImportService / AnomalyDetector / ReportService / SampleDataGenerator
-├── 数据访问层    repositories/*.ts (6个Repo)
+├── 路由层        api/routes/*.ts (8个模块)
+├── 服务层        ImportService / AnomalyDetector / ReportService
+│                 / SampleDataGenerator / SandboxService
+├── 数据访问层    repositories/*.ts (8个Repo)
 └── 工具层        csvParser (中英文表头) / fileHash (SHA256去重)
 
 存储层
 ├── SQLite        api/data/qc_database.db (自动创建)
-└── 7 张表：sensors / readings / import_batches / anomalies
-              / annotations / thresholds / app_state
+└── 11 张表：sensors / readings / import_batches / anomalies
+               / annotations / thresholds / app_state / audit_logs
+               / sandbox_rules / sandbox_playbacks / sandbox_anomalies
+               / sandbox_state
 ```
 
 **关键表设计要点**：

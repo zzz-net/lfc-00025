@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type Request, type Response, type NextFunction } from 'express';
 import multer from 'multer';
 import {
   findAllSandboxRules, findSandboxRuleById, createSandboxRule,
@@ -11,12 +11,30 @@ import {
 import {
   runPlaybackFromSensors, runPlaybackFromCsv, getComparisonResult,
   checkPublishConflict, publishSandboxRuleToLive, generateComparisonCsv,
+  undoLastChange, getRuleHistory,
 } from '../services/SandboxService.js';
 import { getThresholdConfig } from '../repositories/ConfigRepo.js';
 import { insertAuditLog } from '../repositories/AuditLogRepo.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+
+function requireOperator(req: Request, res: Response, next: NextFunction) {
+  let op: string | undefined;
+  if (req.method === 'GET' || req.method === 'DELETE') {
+    op = (req.query as any).operator;
+  } else {
+    op = (req.body as any)?.operator;
+  }
+  if (!op || typeof op !== 'string' || !op.trim()) {
+    res.status(401).json({
+      success: false,
+      error: '缺少操作人：请提供有效的 operator 参数，匿名请求不允许执行该操作',
+    });
+    return;
+  }
+  next();
+}
 
 router.get('/rules', (_req: Request, res: Response) => {
   const rules = findAllSandboxRules();
@@ -32,7 +50,18 @@ router.get('/rules/:id', (req: Request, res: Response) => {
   res.json({ success: true, data: rule });
 });
 
-router.post('/rules', (req: Request, res: Response) => {
+router.get('/rules/:id/history', (req: Request, res: Response) => {
+  const rule = findSandboxRuleById(req.params.id);
+  if (!rule) {
+    res.status(404).json({ success: false, error: '沙盒规则不存在' });
+    return;
+  }
+  const limit = parseInt((req.query.limit as string) || '20', 10);
+  const history = getRuleHistory(req.params.id, limit);
+  res.json({ success: true, data: history });
+});
+
+router.post('/rules', requireOperator, (req: Request, res: Response) => {
   const { name, description, threshold, copyFromLive, operator } = req.body;
 
   let thresholdToUse = threshold;
@@ -44,7 +73,7 @@ router.post('/rules', (req: Request, res: Response) => {
     name: name || '新规则草稿',
     description,
     threshold: thresholdToUse,
-    createdBy: operator || 'system',
+    createdBy: operator.trim(),
     baseVersionAt: new Date().toISOString(),
   });
 
@@ -52,7 +81,7 @@ router.post('/rules', (req: Request, res: Response) => {
     action: 'SANDBOX_RULE_CREATE',
     entityType: 'sandbox_rule',
     entityId: rule.id,
-    operator: operator || 'system',
+    operator: operator.trim(),
     after: { name: rule.name, threshold: rule.threshold },
     detail: `创建沙盒规则：${rule.name}`,
   });
@@ -60,7 +89,7 @@ router.post('/rules', (req: Request, res: Response) => {
   res.json({ success: true, data: rule });
 });
 
-router.put('/rules/:id', (req: Request, res: Response) => {
+router.put('/rules/:id', requireOperator, (req: Request, res: Response) => {
   const rule = findSandboxRuleById(req.params.id);
   if (!rule) {
     res.status(404).json({ success: false, error: '沙盒规则不存在' });
@@ -74,6 +103,7 @@ router.put('/rules/:id', (req: Request, res: Response) => {
     name,
     description,
     threshold,
+    changedBy: operator.trim(),
   });
 
   if (updated) {
@@ -81,7 +111,7 @@ router.put('/rules/:id', (req: Request, res: Response) => {
       action: 'SANDBOX_RULE_UPDATE',
       entityType: 'sandbox_rule',
       entityId: rule.id,
-      operator: operator || 'system',
+      operator: operator.trim(),
       before,
       after: { name: updated.name, description: updated.description, threshold: updated.threshold },
       detail: `更新沙盒规则：${updated.name}`,
@@ -91,7 +121,19 @@ router.put('/rules/:id', (req: Request, res: Response) => {
   res.json({ success: true, data: updated });
 });
 
-router.delete('/rules/:id', (req: Request, res: Response) => {
+router.post('/rules/:id/undo', requireOperator, (req: Request, res: Response) => {
+  const rule = findSandboxRuleById(req.params.id);
+  if (!rule) {
+    res.status(404).json({ success: false, error: '沙盒规则不存在' });
+    return;
+  }
+
+  const { operator } = req.body;
+  const result = undoLastChange(req.params.id, operator.trim());
+  res.json(result);
+});
+
+router.delete('/rules/:id', requireOperator, (req: Request, res: Response) => {
   const rule = findSandboxRuleById(req.params.id);
   if (!rule) {
     res.status(404).json({ success: false, error: '沙盒规则不存在' });
@@ -106,7 +148,7 @@ router.delete('/rules/:id', (req: Request, res: Response) => {
       action: 'SANDBOX_RULE_DELETE',
       entityType: 'sandbox_rule',
       entityId: rule.id,
-      operator: operator || 'system',
+      operator: operator?.trim() || 'system',
       before: { name: rule.name },
       detail: `删除沙盒规则：${rule.name}`,
     });
@@ -115,7 +157,7 @@ router.delete('/rules/:id', (req: Request, res: Response) => {
   res.json({ success: deleted });
 });
 
-router.post('/rules/:id/copy', (req: Request, res: Response) => {
+router.post('/rules/:id/copy', requireOperator, (req: Request, res: Response) => {
   const source = findSandboxRuleById(req.params.id);
   if (!source) {
     res.status(404).json({ success: false, error: '源规则不存在' });
@@ -125,14 +167,14 @@ router.post('/rules/:id/copy', (req: Request, res: Response) => {
   const { newName, operator } = req.body;
   const name = newName || `${source.name} 副本`;
 
-  const copied = copySandboxRule(req.params.id, name, operator);
+  const copied = copySandboxRule(req.params.id, name, operator.trim());
 
   if (copied) {
     insertAuditLog({
       action: 'SANDBOX_RULE_COPY',
       entityType: 'sandbox_rule',
       entityId: copied.id,
-      operator: operator || 'system',
+      operator: operator.trim(),
       before: { sourceId: source.id, sourceName: source.name },
       after: { name: copied.name },
       detail: `复制沙盒规则：${source.name} → ${copied.name}`,
@@ -152,7 +194,7 @@ router.get('/rules/:id/playbacks', (req: Request, res: Response) => {
   res.json({ success: true, data: playbacks });
 });
 
-router.post('/rules/:id/playback/sensors', (req: Request, res: Response) => {
+router.post('/rules/:id/playback/sensors', requireOperator, (req: Request, res: Response) => {
   const rule = findSandboxRuleById(req.params.id);
   if (!rule) {
     res.status(404).json({ success: false, error: '沙盒规则不存在' });
@@ -166,14 +208,14 @@ router.post('/rules/:id/playback/sensors', (req: Request, res: Response) => {
     sensorIds,
     timeStart,
     timeEnd,
-    createdBy: operator,
+    createdBy: operator.trim(),
   });
 
   insertAuditLog({
     action: 'SANDBOX_PLAYBACK_CREATE',
     entityType: 'sandbox_playback',
     entityId: playback.id,
-    operator: operator || 'system',
+    operator: operator.trim(),
     after: { name: playback.name, ruleId: req.params.id, sourceType: 'SENSOR_RANGE' },
     detail: `创建回放任务：${playback.name}`,
   });
@@ -181,7 +223,7 @@ router.post('/rules/:id/playback/sensors', (req: Request, res: Response) => {
   res.json({ success: true, data: playback });
 });
 
-router.post('/rules/:id/playback/csv', upload.single('file'), (req: Request, res: Response) => {
+router.post('/rules/:id/playback/csv', requireOperator, upload.single('file'), (req: Request, res: Response) => {
   const rule = findSandboxRuleById(req.params.id);
   if (!rule) {
     res.status(404).json({ success: false, error: '沙盒规则不存在' });
@@ -199,14 +241,14 @@ router.post('/rules/:id/playback/csv', upload.single('file'), (req: Request, res
   const playback = runPlaybackFromCsv(req.params.id, content, {
     name: name || req.file.originalname,
     fileName: req.file.originalname,
-    createdBy: operator,
+    createdBy: operator?.trim() || 'system',
   });
 
   insertAuditLog({
     action: 'SANDBOX_PLAYBACK_CREATE',
     entityType: 'sandbox_playback',
     entityId: playback.id,
-    operator: operator || 'system',
+    operator: operator?.trim() || 'system',
     after: { name: playback.name, ruleId: req.params.id, sourceType: 'CSV_UPLOAD', fileName: req.file.originalname },
     detail: `创建CSV回放任务：${playback.name}`,
   });
@@ -247,7 +289,7 @@ router.get('/playbacks/:id/anomalies', (req: Request, res: Response) => {
   res.json({ success: true, data: anomalies });
 });
 
-router.get('/playbacks/:id/export', (req: Request, res: Response) => {
+router.get('/playbacks/:id/export', requireOperator, (req: Request, res: Response) => {
   const playback = findPlaybackById(req.params.id);
   if (!playback) {
     res.status(404).json({ success: false, error: '回放任务不存在' });
@@ -256,12 +298,13 @@ router.get('/playbacks/:id/export', (req: Request, res: Response) => {
 
   const csv = generateComparisonCsv(req.params.id);
   const fileName = `sandbox_comparison_${playback.id}.csv`;
+  const { operator } = req.query as { operator?: string };
 
   insertAuditLog({
     action: 'SANDBOX_EXPORT_CSV',
     entityType: 'sandbox_playback',
     entityId: playback.id,
-    operator: (req.query.operator as string) || 'system',
+    operator: operator?.trim() || 'system',
     after: { fileName, playbackName: playback.name },
     detail: `导出沙盒对比报告：${playback.name}`,
   });
@@ -271,7 +314,7 @@ router.get('/playbacks/:id/export', (req: Request, res: Response) => {
   res.send(csv);
 });
 
-router.delete('/playbacks/:id', (req: Request, res: Response) => {
+router.delete('/playbacks/:id', requireOperator, (req: Request, res: Response) => {
   const playback = findPlaybackById(req.params.id);
   if (!playback) {
     res.status(404).json({ success: false, error: '回放任务不存在' });
@@ -286,7 +329,7 @@ router.delete('/playbacks/:id', (req: Request, res: Response) => {
       action: 'SANDBOX_PLAYBACK_DELETE',
       entityType: 'sandbox_playback',
       entityId: req.params.id,
-      operator: operator || 'system',
+      operator: operator?.trim() || 'system',
       before: { name: playback.name },
       detail: `删除回放任务：${playback.name}`,
     });
@@ -305,7 +348,7 @@ router.get('/rules/:id/conflict', (req: Request, res: Response) => {
   res.json({ success: true, data: conflict });
 });
 
-router.post('/rules/:id/publish', (req: Request, res: Response) => {
+router.post('/rules/:id/publish', requireOperator, (req: Request, res: Response) => {
   const rule = findSandboxRuleById(req.params.id);
   if (!rule) {
     res.status(404).json({ success: false, error: '沙盒规则不存在' });
@@ -313,7 +356,7 @@ router.post('/rules/:id/publish', (req: Request, res: Response) => {
   }
 
   const { force, operator } = req.body;
-  const result = publishSandboxRuleToLive(req.params.id, { force, operator });
+  const result = publishSandboxRuleToLive(req.params.id, { force, operator: operator.trim() });
 
   if (!result.success && result.conflict) {
     res.status(409).json(result);
@@ -328,14 +371,14 @@ router.get('/state', (_req: Request, res: Response) => {
   res.json({ success: true, data: state });
 });
 
-router.post('/state', (req: Request, res: Response) => {
+router.post('/state', requireOperator, (req: Request, res: Response) => {
   const { filter, view, selectedSandboxId, selectedPlaybackId, operator } = req.body;
   saveSandboxState({ filter, view, selectedSandboxId, selectedPlaybackId });
 
   insertAuditLog({
     action: 'SANDBOX_STATE_SAVE',
     entityType: 'sandbox_state',
-    operator: operator || 'system',
+    operator: operator?.trim() || 'system',
     after: { selectedSandboxId, selectedPlaybackId },
     detail: '保存沙盒页面状态',
   });

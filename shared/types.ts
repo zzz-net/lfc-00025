@@ -386,6 +386,63 @@ export interface PublishConflictInfo {
   }[];
 }
 
+export interface SandboxRuleHistory {
+  id: string;
+  sandboxRuleId: string;
+  name: string;
+  description?: string;
+  threshold: ThresholdConfig;
+  changedBy: string;
+  changeReason?: string;
+  createdAt: string;
+}
+
+export interface FalsePositiveComparison {
+  liveFalsePositiveCount: number;
+  sandboxRehitCount: number;
+  sandboxRehitRate: number;
+  details: {
+    anomalyId: string;
+    type: AnomalyType;
+    sensorId: string;
+    description: string;
+    readingTimestamp: string;
+    annotationReason: string;
+    sandboxRehit: boolean;
+  }[];
+}
+
+export interface SandboxComparisonResult {
+  summary: {
+    liveTotal: number;
+    sandboxTotal: number;
+    newCount: number;
+    missingCount: number;
+    commonCount: number;
+    delta: number;
+  };
+  bySensor: {
+    sensorId: string;
+    sensorName: string;
+    liveCount: number;
+    sandboxCount: number;
+    newCount: number;
+    missingCount: number;
+    delta: number;
+  }[];
+  byType: {
+    type: string;
+    liveCount: number;
+    sandboxCount: number;
+    newCount: number;
+    missingCount: number;
+    delta: number;
+  }[];
+  newAnomalies: SandboxAnomaly[];
+  missingAnomalies: SandboxAnomaly[];
+  falsePositiveAnalysis?: FalsePositiveComparison;
+}
+
 declare module './types' {
   interface AppState {
     workOrderFilter?: WorkOrderFilter;
